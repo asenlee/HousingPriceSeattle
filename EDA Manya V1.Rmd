@@ -1,0 +1,129 @@
+---
+title: "EDA"
+author: "Manya Chalisgaonkar (69826675)"
+output: pdf_document
+---
+
+```{r 0-setup, message=FALSE, warning=FALSE, include=FALSE}
+# load required libraries, and set up documents global option
+knitr::opts_chunk$set(echo = FALSE)
+options(knitr.table.format = "simple")
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(rpart)
+library(randomForest)
+library(psych)
+```
+
+##EDA of Full dataset
+```{r}
+test<-read.csv('test.csv')   
+train<-read.csv('train.csv')   
+summary(train)
+```
+
+```{r}
+describe(train)
+```
+
+
+##Binning Zip Codes
+```{r}
+as.data.frame(table(train$zip_code))$Var1
+```
+
+
+```{r}
+##Area- 5 sections
+area5_1<-c(98177,98133,98155,98125)
+area5_2<-c(98117,98103,98107,98115,98105)
+area5_3<-c(98199,98119, 98109,98102,98112,98121,98101,98154,98104,98122,98164)
+area5_4<-c(98116,98136,98126,98106,98134,98144,98146)
+area5_5<-c(98108,98118,98168,98178,98188)
+
+```
+
+```{r}
+##Area- 9 sections
+area9_1<-c(98177,98133)
+area9_2<-c(98155,98125)
+area9_3<-c(98117,98103,98107)
+area9_4<-c(98115,98105)
+area9_5<-c(98199,98119, 98109, 98121,98101,98154,98104,98164)
+area9_6<-c(98102,98112,98122,98144)
+area9_7<-c(98116,98136,98126,98106,98134)
+area9_8<-c(98108,98118)
+area9_9<-c(98146,98168,98178,98188)
+```
+
+
+```{r}
+##Check that these areas cover all zip codes in data
+
+#train data/Area 5
+isFALSE(train$zip_code %in% area5_1 |train$zip_code %in% area5_2|train$zip_code %in% area5_3|train$zip_code %in% area5_4|train$zip_code %in% area5_5)
+
+#train data/Area 9
+isFALSE(train$zip_code %in% area9_1 |train$zip_code %in% area9_2|train$zip_code %in% area9_3|train$zip_code %in% area9_4|train$zip_code %in% area9_5|train$zip_code %in% area9_6|train$zip_code %in% area9_7|train$zip_code %in% area9_8|train$zip_code %in% area9_9)
+
+```
+
+
+```{r}
+#Create columns for train data based on the 5 and 9 area breakdowns above
+train=train %>%
+  mutate(zip_area5 = case_when(
+    zip_code %in% area5_1 ~ 1,
+    zip_code %in% area5_2 ~ 2,
+    zip_code %in% area5_3 ~ 3,
+    zip_code %in% area5_4  ~ 4,
+    zip_code %in% area5_5  ~ 5), 
+    zip_area9 = case_when(
+    zip_code %in% area9_1 ~ 1,
+    zip_code %in% area9_2 ~ 2,
+    zip_code %in% area9_3 ~ 3,
+    zip_code %in% area9_4  ~ 4,
+    zip_code %in% area9_5  ~ 5,
+    zip_code %in% area9_6 ~ 6,
+    zip_code %in% area9_7 ~ 7,
+    zip_code %in% area9_8 ~ 8,
+    zip_code %in% area9_9 ~ 9))
+
+```
+
+
+##Number of Stations in zip code
+```{r}
+##Number of train stops
+onestop<-c(98125,98115,98134,98108)
+twostop<-c(98105,98101,98104,98144,98118,98188)
+
+train=train %>%
+  mutate(numtrainstops = case_when(
+    zip_code %in% onestop ~ 1,
+    zip_code %in% twostop ~ 2,
+    TRUE~0))
+```
+
+```{r}
+head(train)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
