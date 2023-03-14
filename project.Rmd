@@ -17,19 +17,21 @@ library(randomForest)
 
 
 
-```{r 1-clean, message=FALSE, warning=FALSE, include=FALSE}
-# (after preliminary visualization, clean the data (filter out meaningless predictors and deal with missing values, outliers, and unbalanced classes)
-clean_data <- function(raw) { 
-  clean <- raw %>%
+```{r 1-process, message=FALSE, warning=FALSE, include=FALSE}
+# (after preliminary visualization), clean the data by filtering out meaningless 
+# predictors, removing missing values, factoring categorical predictors, 
+# filtering outliers, filtering or balancing unbalanced classes, and making
+# a proper transformations
+process_data <- function(raw) { 
+  dataPr <- raw %>%
     drop_na() %>%
-    filter(price < 4000000) %>%
-    transmute(zip   = factor(zip_code),
-              bed   = beds,
-              bath  = baths,
-              size  = size, 
-              lot   = if_else(lot_size_units == "acre", log(lot_size * 43560), log(lot_size)), 
-              price = price/1000)
-  return(clean)
+    filter(price < 3e6 & beds < 10) %>%
+    mutate(zip   = factor(zip_code),
+           loglot = if_else(lot_size_units == "acre", log(lot_size * 43560), log(lot_size)),
+           price  = price/1000) %>%
+    filter(loglot < log(1e5)) %>%
+    select(zip, beds, baths, size, loglot, price)
+  return(dataPr)
 }
 ```
 
@@ -41,7 +43,6 @@ summarize_data <- function(data, output = T) {
   vars <- colnames(data)
   n    <- length(vars)
   corr <- double(n-1)
-  par(mfrow=c(2,3))
   for (i in 2:(n-1)) {
     corr[i] <- cor(data$price, data[, i])
     if (output) {
@@ -51,25 +52,16 @@ summarize_data <- function(data, output = T) {
       cat(vars[i], corr[i], "\n")
     }
   }
-  return(list(train = data, corr = corr, vars = vars))
+  return(data) # corr = corr, vars = vars
 }
 ```
 
 
-
-```{r 3-transform, message=FALSE, warning=FALSE, include=FALSE}
-# apply the appropriate transformation to the predictors and save the residual after transformation for each predictor
- # (proper transform is found by applying many transformations in the exploratory analysis stage)
-transform_data <- function(obj) { 
-
- return(obj)
-}
-```
 
 ```{r dev}
 test    <- read.csv('test.csv')   
-train   <- read.csv('train.csv') %>%
-  clean_data() %>%
+housing   <- read.csv('train.csv') %>%
+  process_data() %>%
   summarize_data()
 ```
 
@@ -86,7 +78,7 @@ table(train$zip_code)
 
 
 
-```{r 4-model, message=FALSE, warning=FALSE, include=FALSE}
+```{r 3-model, message=FALSE, warning=FALSE, include=FALSE}
 # fit models (models are selected based on the results of exploratory analysis on train set)
 fit_model <- function(obj) { 
 
@@ -96,7 +88,7 @@ fit_model <- function(obj) {
 
 
 
-```{r 5-predict, message=FALSE, warning=FALSE, include=FALSE}
+```{r 4-predict, message=FALSE, warning=FALSE, include=FALSE}
 # given fitted models and test dataset, compute prediction
 predict_price <- function(obj) { 
 
@@ -106,7 +98,7 @@ predict_price <- function(obj) {
 
 
 
-```{r 6-validate, message=FALSE, warning=FALSE, include=FALSE}
+```{r 5-validate, message=FALSE, warning=FALSE, include=FALSE}
 # using all models and holdout predictions, compute diagnostic measures 
 validate_model <- function(obj) { 
 
@@ -116,7 +108,7 @@ validate_model <- function(obj) {
 
 
 
-```{r 7-select, message=FALSE, warning=FALSE, include=FALSE}
+```{r 6-select, message=FALSE, warning=FALSE, include=FALSE}
 # based on the diagnostics computed in the validation stage, select the best performer
 select_model <- function(obj) { 
 
@@ -130,13 +122,12 @@ select_model <- function(obj) {
 main <- function(train, test) {
   
   analysis   <- train %>%
-    clean_data() %>%                                          # 1. clean
+    process_data() %>%                                          # 1. process
     summarize_data(output = F) %>%                              # 2. summarize 
-    transform_data() %>%                                        # 3. transform
-    fit_model() %>%                                             # 4. model
-    predict_price(test) %>%                                     # 5. predict
-    validate_model() %>%                                        # 6. validate
-    select_model() %>%                                          # 7. select
+    fit_model() %>%                                             # 3. model
+    predict_price(test) %>%                                     # 4. predict
+    validate_model() %>%                                        # 5. validate
+    select_model() %>%                                          # 6. select
   
   return(list(trainR    = analysis$train,
               trainT    = analysis$trainT,
