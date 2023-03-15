@@ -13,9 +13,331 @@ library(tidyr)
 library(magrittr)
 library(rpart)
 library(randomForest)
+library(Hmisc)
+library(psych)
+library(ggplot2)
+library(cowplot)
 ```
 
 
+##### EDA
+
+```{r}
+# load data
+train = read.csv("train.csv")
+```
+
+```{r}
+head(train)
+```
+
+```{r summary}
+names(train)
+dim(train)
+summary(train)
+unique(train$size_units)
+unique(train$lot_size_units)
+table(train$zip_code)
+```
+```{r}
+typeof(train$beds)
+typeof(train$baths)
+typeof(train$size)
+typeof(train$size_units)
+typeof(train$lot_size)
+typeof(train$lot_size_units)
+typeof(train$zip_code)
+typeof(train$price)
+```
+
+```{r}
+summary(train)
+```
+```{r}
+describe(train)
+```
+
+
+```{r}
+# size of train dataset
+nrow(train)
+# unique zip code values
+length(unique(train$zip_code))
+# unique lot_size_units, size_units value
+unique(train$lot_size_units)
+unique(train$size_units)
+```
+Remove lot_size_units after transforming lot_size with standardized value. Remove lot_size as there is only one value `sqft`.
+
+```{r}
+# number of missing values
+sum(complete.cases(train))
+sum(!complete.cases(train))
+```
+
+```{r}
+# na values for lot_size
+sum(!complete.cases(train$lot_size))
+```
+
+All the missing values are from lot_size. Drop null values for preprocessing
+
+```{r}
+# pair plot of numeric features
+numeric_features = train %>% dplyr::select(where(is.numeric))
+numeric_features = subset(numeric_features, select=-c(zip_code, price))
+pairs(numeric_features)
+```
+
+```{r}
+boxplot(numeric_features)
+```
+
+
+```{r}
+h3 <- ggplot(train, aes(x = price)) +
+  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
+  ggtitle("Distribution of Price") +
+  theme_classic()
+h2 <- ggplot(train, aes(x = lot_size)) +
+  geom_histogram(fill = "#15ad4f", color = "#000000", position = "identity") +
+  ggtitle("Distribution of Lot Size") +
+  theme_classic()
+h1 <- ggplot(train, aes(x = size)) +
+  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
+  ggtitle("Distribution of Property Size") +
+  theme_classic()
+h4 <- ggplot(train, aes(x=price)) +
+  geom_boxplot() +
+  ggtitle("Boxplot for Price") +
+  theme_classic()
+
+plot_grid(h1, h2, h3, h4, nrow = 2, ncol = 2)
+```
+
+
+```{r}
+value_imputed <- data.frame(
+  original = train$lot_size,
+  imputed_zero = replace(train$lot_size, is.na(train$lot_size), 0),
+  imputed_mean = replace(train$lot_size, is.na(train$lot_size), mean(train$lot_size, na.rm = TRUE)),
+  imputed_median = replace(train$lot_size, is.na(train$lot_size), median(train$lot_size, na.rm = TRUE))
+)
+value_imputed
+```
+
+```{r}
+h1 <- ggplot(value_imputed, aes(x = original)) +
+  geom_histogram(fill = "#ad1538", color = "#000000", position = "identity") +
+  ggtitle("Original distribution") +
+  theme_classic()
+h2 <- ggplot(value_imputed, aes(x = imputed_zero)) +
+  geom_histogram(fill = "#15ad4f", color = "#000000", position = "identity") +
+  ggtitle("Zero-imputed distribution") +
+  theme_classic()
+h3 <- ggplot(value_imputed, aes(x = imputed_mean)) +
+  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
+  ggtitle("Mean-imputed distribution") +
+  theme_classic()
+h4 <- ggplot(value_imputed, aes(x = imputed_median)) +
+  geom_histogram(fill = "#ad8415", color = "#000000", position = "identity") +
+  ggtitle("Median-imputed distribution") +
+  theme_classic()
+
+plot_grid(h1, h2, h3, h4, nrow = 2, ncol = 2)
+```
+
+
+
+```{r}
+library(mice)
+mice_imputed <- data.frame(
+  original = train$lot_size,
+  imputed_pmm = complete(mice(numeric_features, method = "pmm"))$lot_size,
+  imputed_cart = complete(mice(numeric_features, method = "cart"))$lot_size,
+  imputed_lasso = complete(mice(numeric_features, method = "lasso.norm"))$lot_size
+)
+mice_imputed
+```
+pmm: Predictive mean matching.
+cart: Classification and regression trees.
+laso.norm: Lasso linear regression.
+
+```{r}
+h1 <- ggplot(mice_imputed, aes(x = original)) +
+  geom_histogram(fill = "#ad1538", color = "#000000", position = "identity") +
+  ggtitle("Original distribution") +
+  theme_classic()
+h2 <- ggplot(mice_imputed, aes(x = imputed_pmm)) +
+  geom_histogram(fill = "#15ad4f", color = "#000000", position = "identity") +
+  ggtitle("PMM-imputed distribution") +
+  theme_classic()
+h3 <- ggplot(mice_imputed, aes(x = imputed_cart)) +
+  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
+  ggtitle("CART-imputed distribution") +
+  theme_classic()
+h4 <- ggplot(mice_imputed, aes(x = imputed_lasso)) +
+  geom_histogram(fill = "#ad8415", color = "#000000", position = "identity") +
+  ggtitle("Lasso-imputed distribution") +
+  theme_classic()
+
+plot_grid(h1, h2, h3, h4, nrow = 2, ncol = 2)
+```
+
+
+```{r dev}
+train_clean   <- read.csv('train.csv') %>%
+  clean_data()
+```
+
+```{r}
+head(train_clean)
+```
+
+```{r}
+summary(train_clean)
+```
+
+
+```{r}
+ggplot(train_clean, aes(x = lot)) +
+  geom_histogram(fill = "#ad8415", color = "#000000", position = "identity") +
+  ggtitle("Lot Size Distribution") +
+  theme_classic()
+```
+
+
+```{r}
+# pair plot of numeric features
+train_subset = subset(train_clean, select=-c(zip, price))
+pairs(train_subset)
+```
+
+```{r}
+# correlation matrix
+cor(train_subset, method="spearman")
+```
+
+```{r}
+# boxplots of numeric variables
+boxplot(train_clean$price, main="Price")
+boxplot(train_clean$bed, main="# Bedroom")
+boxplot(train_clean$bath, main="# Bathroom")
+boxplot(train_clean$size, main="House Size (sqft)")
+boxplot(train_clean$lot, main="Lot Size")
+```
+Still some outliers
+
+
+
+```{r warning=FALSE, message=FALSE}
+train_clean2 = read.csv("train.csv") %>%
+  clean_data2()
+
+summary(train_clean2)
+```
+```{r}
+sum(!complete.cases(train_clean2$lot))
+```
+```{r}
+h3 <- ggplot(train_clean2, aes(x = price)) +
+  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
+  ggtitle("Distribution of Price") +
+  theme_classic()
+h2 <- ggplot(train_clean2, aes(x = lot)) +
+  geom_histogram(fill = "#15ad4f", color = "#000000", position = "identity") +
+  ggtitle("Distribution of Lot Size") +
+  theme_classic()
+h1 <- ggplot(train_clean2, aes(x = size)) +
+  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
+  ggtitle("Distribution of Property Size") +
+  theme_classic()
+h4 <- ggplot(train_clean2, aes(x=price)) +
+  geom_boxplot() +
+  ggtitle("Boxplot for Price") +
+  theme_classic()
+
+plot_grid(h1, h2, h3, h4, nrow = 2, ncol = 2)
+```
+
+##Binning Zip Codes
+
+```{r}
+as.data.frame(table(train_clean2$zip))$Var1
+```
+
+
+```{r}
+##Area- 5 sections
+area5_1<-c(98177,98133,98155,98125)
+area5_2<-c(98117,98103,98107,98115,98105)
+area5_3<-c(98199,98119, 98109,98102,98112,98121,98101,98154,98104,98122,98164)
+area5_4<-c(98116,98136,98126,98106,98134,98144,98146)
+area5_5<-c(98108,98118,98168,98178,98188)
+##Area- 9 sections
+area9_1<-c(98177,98133)
+area9_2<-c(98155,98125)
+area9_3<-c(98117,98103,98107)
+area9_4<-c(98115,98105)
+area9_5<-c(98199,98119, 98109, 98121,98101,98154,98104,98164)
+area9_6<-c(98102,98112,98122,98144)
+area9_7<-c(98116,98136,98126,98106,98134)
+area9_8<-c(98108,98118)
+area9_9<-c(98146,98168,98178,98188)
+```
+
+
+
+```{r}
+##Check that these areas cover all zip codes in data
+#train data/Area 5
+isFALSE(train_clean2$zip_code %in% area5_1 |train$zip_code %in% area5_2|train$zip_code %in% area5_3|train$zip_code %in% area5_4|train$zip_code %in% area5_5)
+#train data/Area 9
+isFALSE(train_clean2$zip_code %in% area9_1 |train$zip_code %in% area9_2|train$zip_code %in% area9_3|train$zip_code %in% area9_4|train$zip_code %in% area9_5|train$zip_code %in% area9_6|train$zip_code %in% area9_7|train$zip_code %in% area9_8|train$zip_code %in% area9_9)
+```
+
+
+```{r}
+#Create columns for train data based on the 5 and 9 area breakdowns above
+train_clean2=train_clean2 %>%
+  mutate(zip_area5 = case_when(
+    zip %in% area5_1 ~ 1,
+    zip %in% area5_2 ~ 2,
+    zip %in% area5_3 ~ 3,
+    zip %in% area5_4  ~ 4,
+    zip %in% area5_5  ~ 5), 
+    zip_area9 = case_when(
+    zip %in% area9_1 ~ 1,
+    zip %in% area9_2 ~ 2,
+    zip %in% area9_3 ~ 3,
+    zip %in% area9_4  ~ 4,
+    zip %in% area9_5  ~ 5,
+    zip %in% area9_6 ~ 6,
+    zip %in% area9_7 ~ 7,
+    zip %in% area9_8 ~ 8,
+    zip %in% area9_9 ~ 9))
+```
+
+
+##Number of Stations in zip code
+```{r}
+##Number of train stops
+onestop<-c(98125,98115,98134,98108)
+twostop<-c(98105,98101,98104,98144,98118,98188)
+train_clean2=train_clean2 %>%
+  mutate(numtrainstops = case_when(
+    zip %in% onestop ~ 1,
+    zip %in% twostop ~ 2,
+    TRUE~0))
+```
+
+```{r}
+head(train_clean2)
+```
+
+
+
+##### Functions
 
 ```{r 1-clean, message=FALSE, warning=FALSE, include=FALSE}
 # (after preliminary visualization, clean the data (filter out meaningless predictors and deal with missing values, outliers, and unbalanced classes)
@@ -31,8 +353,20 @@ clean_data <- function(raw) {
               price = price/1000)
   return(clean)
 }
-```
 
+clean_data2 <- function(raw) { 
+  clean <- raw %>%
+    impute(mean(raw$lot_size, na.rm=T)) %>%
+    filter(price < 3e6 & beds < 10) %>%
+    transmute(zip   = factor(zip_code),
+              bed   = beds,
+              bath  = baths,
+              size  = log(size), 
+              lot   = if_else(lot_size_units == "acre", log(lot_size * 43560), log(lot_size)), 
+              price = price/1000)
+  return(clean)
+}
+```
 
 
 ```{r 2-summarize, message=FALSE, warning=FALSE, include=FALSE}
@@ -69,22 +403,9 @@ transform_data <- function(obj) {
 ```{r dev}
 test    <- read.csv('test.csv')   
 train   <- read.csv('train.csv') %>%
-  clean_data() %>%
+  clean_data() #%>%
   summarize_data()
 ```
-
-
-
-```{r summary}
-names(train)
-dim(train)
-summary(train)
-unique(train$size_units)
-unique(train$lot_size_units)
-table(train$zip_code)
-```
-
-
 
 ```{r 4-model, message=FALSE, warning=FALSE, include=FALSE}
 # fit models (models are selected based on the results of exploratory analysis on train set)
@@ -148,7 +469,6 @@ main <- function(train, test) {
               best      = analysis$best))
 }
 ```
-
 
 
 
