@@ -13,6 +13,8 @@ library(tidyr)
 library(magrittr)
 library(rpart)
 library(randomForest)
+library(glmnet)
+library(mgcv)
 ```
 
 
@@ -52,7 +54,9 @@ summarize_data <- function(data, output = T) {
       cat(vars[i], corr[i], "\n")
     }
   }
-  return(data) # corr = corr, vars = vars
+  corr[1] <- 1
+  corr[6] <- 1
+  return(list(train = data, corr = corr, vars = vars))
 }
 ```
 
@@ -80,10 +84,19 @@ table(train$zip_code)
 
 ```{r 3-model, message=FALSE, warning=FALSE, include=FALSE}
 # fit models (models are selected based on the results of exploratory analysis on train set)
-fit_model <- function(obj) { 
-
- return(obj)
+fit_model <- function(obj) {
+  obj$ols   <- lm(price~., data = obj$train)
+  #obj$wls  <- lm(price~., data = obj$train, weights = abs(obj$corr))
+  obj$rf    <- randomForest(price~., data = obj$train)
+  obj$gam   <- gam(price~s(size), family = "gaussian", data = obj$train)
+  #obj$ridge <- glmnet()
+  #obj$lasso <- glmnet()
+  return(obj)
 }
+```
+
+```{r}
+mod <- fit_model(housing)
 ```
 
 
