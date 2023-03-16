@@ -13,23 +13,39 @@ library(tidyr)
 library(magrittr)
 library(rpart)
 library(randomForest)
+library(glmnet)
+library(mgcv)
+library(e1071)
 ```
 
 
 
 ```{r 1-clean, message=FALSE, warning=FALSE, include=FALSE}
-# (after preliminary visualization, clean the data (filter out meaningless predictors and deal with missing values, outliers, and unbalanced classes)
-clean_data <- function(raw) { 
-  clean <- raw %>%
+# (after preliminary visualization), clean the data by filtering out meaningless 
+# predictors, removing missing values, factoring categorical predictors, 
+# filtering outliers, filtering or balancing unbalanced classes, and making
+# a proper transformations
+clean_data <- function(train, test) { 
+  
+  trainPr <- train %>%
     drop_na() %>%
-    filter(price < 4000000) %>%
-    transmute(zip   = factor(zip_code),
-              bed   = beds,
-              bath  = baths,
-              size  = size, 
-              lot   = if_else(lot_size_units == "acre", log(lot_size * 43560), log(lot_size)), 
-              price = price/1000)
-  return(clean)
+    filter(price < 1e7) %>%
+    mutate(zip   = factor(zip_code),
+           lot = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price  = price/1000) %>%
+    filter( lot < 1e5) %>%
+    select(zip, beds, baths, size, lot, price)
+  
+  
+  testPr <- test %>%
+    drop_na() %>%
+    filter(price < 1e7) %>%
+    mutate(zip   = factor(zip_code),
+           lot = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price  = price/1000) %>%
+    filter( lot < 1e5) %>%
+    select(zip, beds, baths, size, lot, price)
+  return(list(train = trainPr, test = testPr))
 }
 ```
 
@@ -37,116 +53,118 @@ clean_data <- function(raw) {
 
 ```{r 2-summarize, message=FALSE, warning=FALSE, include=FALSE}
 # produce many summary statistics and simple plots (some of the results such as correlations are saved in obj)
-summarize_data <- function(data, output = T) { 
-  vars <- colnames(data)
-  n    <- length(vars)
-  corr <- double(n-1)
-  par(mfrow=c(2,3))
+summarize_data <- function(obj, output = T) { 
+  train <- obj$train
+  vars  <- colnames(train)
+  obj$vars <- vars
+  n     <- length(train)
+  corr  <- double(n-1)
+  print(cor(train[,-1]))
   for (i in 2:(n-1)) {
-    corr[i] <- cor(data$price, data[, i])
+    corr[i] <- round(cor(train$price, train[, i]), 2)
     if (output) {
-      hist(data[, i],             xlab = vars[i], main = "")
-      plot(data$price, data[, i], xlab="price", ylab=vars[i])
-      plot(data$zip,   data[, i], xlab="price", ylab=vars[i])
-      cat(vars[i], corr[i], "\n")
+      plot(train$price, train[, i], xlab="price", ylab=vars[i])
+      plot(train$zip,   train[, i], xlab="price", ylab=vars[i])
     }
   }
-  return(list(train = data, corr = corr, vars = vars))
+  corr[c(1,6)] <- 1
+  obj$corr     <- corr
+  return(obj)
 }
 ```
 
 
-
-```{r 3-transform, message=FALSE, warning=FALSE, include=FALSE}
-# apply the appropriate transformation to the predictors and save the residual after transformation for each predictor
- # (proper transform is found by applying many transformations in the exploratory analysis stage)
-transform_data <- function(obj) { 
-
- return(obj)
-}
-```
 
 ```{r dev}
 test    <- read.csv('test.csv')   
-train   <- read.csv('train.csv') %>%
-  clean_data() %>%
+housing   <- read.csv('train.csv') %>%
+  clean_data(test) %>%
   summarize_data()
 ```
 
 
 
 ```{r summary}
-names(train)
-dim(train)
-summary(train)
-unique(train$size_units)
-unique(train$lot_size_units)
-table(train$zip_code)
+names(housing$train)
+dim(housing$train)
+kableExtra::kable(summary(housing$train))
+unique(housing$train$size)
+unique(housing$train$lot)
+table(housing$train$zip)
 ```
 
 
 
-```{r 4-model, message=FALSE, warning=FALSE, include=FALSE}
+```{r 3-model, message=FALSE, warning=FALSE, include=FALSE}
 # fit models (models are selected based on the results of exploratory analysis on train set)
-fit_model <- function(obj) { 
-
- return(obj)
+fit_model <- function(obj) {
+  obj$ols   <- lm(price~., data = obj$train)
+  #obj$wls  <- lm(price~., data = obj$train, weights = abs(obj$corr))
+  obj$rf    <- randomForest(price~., data = obj$train)
+  obj$gam   <- gam(price~s(size), family = "gaussian", data = obj$train)
+  obj$svm   <- svm(price~., data = obj$train, kernel = "radial", scale = FALSE)
+  #obj$ridge <- glmnet()
+  #obj$lasso <- glmnet()
+  return(obj)
 }
+```
+
+```{r}
+mod <- fit_model(housing)
 ```
 
 
 
-```{r 5-predict, message=FALSE, warning=FALSE, include=FALSE}
+```{r 4-predict, message=FALSE, warning=FALSE, include=FALSE}
 # given fitted models and test dataset, compute prediction
-predict_price <- function(obj) { 
-
- return(obj)
-}
+#predict_price <- function(obj) { 
+#
+# return(obj)
+#}
 ```
 
 
 
-```{r 6-validate, message=FALSE, warning=FALSE, include=FALSE}
+```{r 5-validate, message=FALSE, warning=FALSE, include=FALSE}
 # using all models and holdout predictions, compute diagnostic measures 
-validate_model <- function(obj) { 
+#validate_model <- function(obj) { 
 
- return(obj)
-}
+# return(obj)
+#}
 ```
 
 
 
-```{r 7-select, message=FALSE, warning=FALSE, include=FALSE}
+```{r 6-select, message=FALSE, warning=FALSE, include=FALSE}
 # based on the diagnostics computed in the validation stage, select the best performer
-select_model <- function(obj) { 
+#select_model <- function(obj) { 
 
- return(obj)
-}
+# return(obj)
+#}
 ```
 
 
 
 ```{r main, message=FALSE, warning=FALSE, include=FALSE}
-main <- function(train, test) {
-  
-  analysis   <- train %>%
-    clean_data() %>%                                          # 1. clean
-    summarize_data(output = F) %>%                              # 2. summarize 
-    transform_data() %>%                                        # 3. transform
-    fit_model() %>%                                             # 4. model
-    predict_price(test) %>%                                     # 5. predict
-    validate_model() %>%                                        # 6. validate
-    select_model() %>%                                          # 7. select
-  
-  return(list(trainR    = analysis$train,
-              trainT    = analysis$trainT,
-              testR     = analysis$test,
-              testT     = analysis$testT,
-              models    = analysis$models,
-              preds50   = analysis$preds50,
-              preds80   = analysis$preds80,
-              best      = analysis$best))
-}
+# main <- function(train, test) {
+#   
+#   analysis   <- train %>%
+#     clean_data() %>%                                          # 1. clean
+#     summarize_data(output = F) %>%                              # 2. summarize 
+#     fit_model() %>%                                             # 3. model
+#     predict_price(test) %>%                                     # 4. predict
+#     validate_model() %>%                                        # 5. validate
+#     select_model() %>%                                          # 6. select
+#   
+#   return(list(trainR    = analysis$train,
+#               trainT    = analysis$trainT,
+#               testR     = analysis$test,
+#               testT     = analysis$testT,
+#               models    = analysis$models,
+#               preds50   = analysis$preds50,
+#               preds80   = analysis$preds80,
+#               best      = analysis$best))
+# }
 ```
 
 
@@ -156,7 +174,7 @@ main <- function(train, test) {
 ##### Data:
 
 
-##### Preprocessing:
+##### Precleaning:
 
 
  
@@ -170,9 +188,9 @@ main <- function(train, test) {
 
 
 ```{r run, echo=FALSE, message=FALSE, warning=FALSE}
-test    <- read.csv('test.csv')   
-train   <- read.csv('train.csv') 
-output  <- main(train, test)
+# test    <- read.csv('test.csv')   
+# train   <- read.csv('train.csv') 
+# output  <- main(train, test)
 ```
 
 
