@@ -55,6 +55,19 @@ area9_9<-c(98146,98168,98178,98188)
 ```
 
 
+```{r}
+##Area- 7 sections
+
+area7_1<-c(98177,98133,98155,98125,98103)
+area7_2<-c(98117,98107)
+area7_3<-c(98115,98105)
+area7_4<-c(98199,98119, 98109, 98121,98101,98154,98104,98164)
+area7_5<-c(98102,98112,98122,98144)
+area7_6<-c(98116,98136,98126,98106,98134)
+area7_7<-c(98108,98118,98146,98168,98178,98188)
+
+```
+
 
 ```{r}
 ##Check that these areas cover all zip codes in data
@@ -86,7 +99,15 @@ train=train %>%
     zip_code %in% area9_6 ~ 6,
     zip_code %in% area9_7 ~ 7,
     zip_code %in% area9_8 ~ 8,
-    zip_code %in% area9_9 ~ 9))
+    zip_code %in% area9_9 ~ 9),
+    zip_area7 = case_when(
+    zip_code %in% area7_1 ~ 1,
+    zip_code %in% area7_2 ~ 2,
+    zip_code %in% area7_3 ~ 3,
+    zip_code %in% area7_4  ~ 4,
+    zip_code %in% area7_5  ~ 5,
+    zip_code %in% area7_6 ~ 6,
+    zip_code %in% area7_7 ~ 7))
 
 ```
 
@@ -108,6 +129,9 @@ train=train %>%
 head(train)
 ```
 
+```{r}
+hist(train$zip_area7, xlim=c(0,8), breaks = c(0,1,2,3,4,5,6,7), main = "Histogram with 7 Zip Code bins")
+```
 
 
 
