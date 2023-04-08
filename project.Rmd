@@ -13,462 +13,204 @@ library(tidyr)
 library(magrittr)
 library(rpart)
 library(randomForest)
-library(Hmisc)
-library(psych)
-library(ggplot2)
-library(cowplot)
+library(glmnet)
+library(mgcv)
+library(e1071)
+library(quantregForest)
 ```
 
 
-##### EDA
-
-```{r}
-# load data
-train = read.csv("train.csv")
-```
-
-```{r}
-head(train)
-```
-
-```{r summary}
-names(train)
-dim(train)
-summary(train)
-unique(train$size_units)
-unique(train$lot_size_units)
-table(train$zip_code)
-```
-```{r}
-typeof(train$beds)
-typeof(train$baths)
-typeof(train$size)
-typeof(train$size_units)
-typeof(train$lot_size)
-typeof(train$lot_size_units)
-typeof(train$zip_code)
-typeof(train$price)
-```
-
-```{r}
-summary(train)
-```
-```{r}
-describe(train)
-```
-
-
-```{r}
-# size of train dataset
-nrow(train)
-# unique zip code values
-length(unique(train$zip_code))
-# unique lot_size_units, size_units value
-unique(train$lot_size_units)
-unique(train$size_units)
-```
-Remove lot_size_units after transforming lot_size with standardized value. Remove lot_size as there is only one value `sqft`.
-
-```{r}
-# number of missing values
-sum(complete.cases(train))
-sum(!complete.cases(train))
-```
-
-```{r}
-# na values for lot_size
-sum(!complete.cases(train$lot_size))
-```
-
-All the missing values are from lot_size. Drop null values for preprocessing
-
-```{r}
-# pair plot of numeric features
-numeric_features = train %>% dplyr::select(where(is.numeric))
-numeric_features = subset(numeric_features, select=-c(zip_code, price))
-pairs(numeric_features)
-```
-
-```{r}
-boxplot(numeric_features)
-```
-
-
-```{r}
-h3 <- ggplot(train, aes(x = price)) +
-  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
-  ggtitle("Distribution of Price") +
-  theme_classic()
-h2 <- ggplot(train, aes(x = lot_size)) +
-  geom_histogram(fill = "#15ad4f", color = "#000000", position = "identity") +
-  ggtitle("Distribution of Lot Size") +
-  theme_classic()
-h1 <- ggplot(train, aes(x = size)) +
-  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
-  ggtitle("Distribution of Property Size") +
-  theme_classic()
-h4 <- ggplot(train, aes(x=price)) +
-  geom_boxplot() +
-  ggtitle("Boxplot for Price") +
-  theme_classic()
-
-plot_grid(h1, h2, h3, h4, nrow = 2, ncol = 2)
-```
-
-
-```{r}
-value_imputed <- data.frame(
-  original = train$lot_size,
-  imputed_zero = replace(train$lot_size, is.na(train$lot_size), 0),
-  imputed_mean = replace(train$lot_size, is.na(train$lot_size), mean(train$lot_size, na.rm = TRUE)),
-  imputed_median = replace(train$lot_size, is.na(train$lot_size), median(train$lot_size, na.rm = TRUE))
-)
-value_imputed
-```
-
-```{r}
-h1 <- ggplot(value_imputed, aes(x = original)) +
-  geom_histogram(fill = "#ad1538", color = "#000000", position = "identity") +
-  ggtitle("Original distribution") +
-  theme_classic()
-h2 <- ggplot(value_imputed, aes(x = imputed_zero)) +
-  geom_histogram(fill = "#15ad4f", color = "#000000", position = "identity") +
-  ggtitle("Zero-imputed distribution") +
-  theme_classic()
-h3 <- ggplot(value_imputed, aes(x = imputed_mean)) +
-  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
-  ggtitle("Mean-imputed distribution") +
-  theme_classic()
-h4 <- ggplot(value_imputed, aes(x = imputed_median)) +
-  geom_histogram(fill = "#ad8415", color = "#000000", position = "identity") +
-  ggtitle("Median-imputed distribution") +
-  theme_classic()
-
-plot_grid(h1, h2, h3, h4, nrow = 2, ncol = 2)
-```
-
-
-
-```{r}
-library(mice)
-mice_imputed <- data.frame(
-  original = train$lot_size,
-  imputed_pmm = complete(mice(numeric_features, method = "pmm"))$lot_size,
-  imputed_cart = complete(mice(numeric_features, method = "cart"))$lot_size,
-  imputed_lasso = complete(mice(numeric_features, method = "lasso.norm"))$lot_size
-)
-mice_imputed
-```
-pmm: Predictive mean matching.
-cart: Classification and regression trees.
-laso.norm: Lasso linear regression.
-
-```{r}
-h1 <- ggplot(mice_imputed, aes(x = original)) +
-  geom_histogram(fill = "#ad1538", color = "#000000", position = "identity") +
-  ggtitle("Original distribution") +
-  theme_classic()
-h2 <- ggplot(mice_imputed, aes(x = imputed_pmm)) +
-  geom_histogram(fill = "#15ad4f", color = "#000000", position = "identity") +
-  ggtitle("PMM-imputed distribution") +
-  theme_classic()
-h3 <- ggplot(mice_imputed, aes(x = imputed_cart)) +
-  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
-  ggtitle("CART-imputed distribution") +
-  theme_classic()
-h4 <- ggplot(mice_imputed, aes(x = imputed_lasso)) +
-  geom_histogram(fill = "#ad8415", color = "#000000", position = "identity") +
-  ggtitle("Lasso-imputed distribution") +
-  theme_classic()
-
-plot_grid(h1, h2, h3, h4, nrow = 2, ncol = 2)
-```
-
-
-```{r dev}
-train_clean   <- read.csv('train.csv') %>%
-  clean_data()
-```
-
-```{r}
-head(train_clean)
-```
-
-```{r}
-summary(train_clean)
-```
-
-
-```{r}
-ggplot(train_clean, aes(x = lot)) +
-  geom_histogram(fill = "#ad8415", color = "#000000", position = "identity") +
-  ggtitle("Lot Size Distribution") +
-  theme_classic()
-```
-
-
-```{r}
-# pair plot of numeric features
-train_subset = subset(train_clean, select=-c(zip, price))
-pairs(train_subset)
-```
-
-```{r}
-# correlation matrix
-cor(train_subset, method="spearman")
-```
-
-```{r}
-# boxplots of numeric variables
-boxplot(train_clean$price, main="Price")
-boxplot(train_clean$bed, main="# Bedroom")
-boxplot(train_clean$bath, main="# Bathroom")
-boxplot(train_clean$size, main="House Size (sqft)")
-boxplot(train_clean$lot, main="Lot Size")
-```
-Still some outliers
-
-
-
-```{r warning=FALSE, message=FALSE}
-train_clean2 = read.csv("train.csv") %>%
-  clean_data2()
-
-summary(train_clean2)
-```
-```{r}
-sum(!complete.cases(train_clean2$lot))
-```
-```{r}
-h3 <- ggplot(train_clean2, aes(x = price)) +
-  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
-  ggtitle("Distribution of Price") +
-  theme_classic()
-h2 <- ggplot(train_clean2, aes(x = lot)) +
-  geom_histogram(fill = "#15ad4f", color = "#000000", position = "identity") +
-  ggtitle("Distribution of Lot Size") +
-  theme_classic()
-h1 <- ggplot(train_clean2, aes(x = size)) +
-  geom_histogram(fill = "#1543ad", color = "#000000", position = "identity") +
-  ggtitle("Distribution of Property Size") +
-  theme_classic()
-h4 <- ggplot(train_clean2, aes(x=price)) +
-  geom_boxplot() +
-  ggtitle("Boxplot for Price") +
-  theme_classic()
-
-plot_grid(h1, h2, h3, h4, nrow = 2, ncol = 2)
-```
-
-##Binning Zip Codes
-
-```{r}
-as.data.frame(table(train_clean2$zip))$Var1
-```
-
-
-```{r}
-##Area- 5 sections
-area5_1<-c(98177,98133,98155,98125)
-area5_2<-c(98117,98103,98107,98115,98105)
-area5_3<-c(98199,98119, 98109,98102,98112,98121,98101,98154,98104,98122,98164)
-area5_4<-c(98116,98136,98126,98106,98134,98144,98146)
-area5_5<-c(98108,98118,98168,98178,98188)
-##Area- 9 sections
-area9_1<-c(98177,98133)
-area9_2<-c(98155,98125)
-area9_3<-c(98117,98103,98107)
-area9_4<-c(98115,98105)
-area9_5<-c(98199,98119, 98109, 98121,98101,98154,98104,98164)
-area9_6<-c(98102,98112,98122,98144)
-area9_7<-c(98116,98136,98126,98106,98134)
-area9_8<-c(98108,98118)
-area9_9<-c(98146,98168,98178,98188)
-```
-
-
-
-```{r}
-##Check that these areas cover all zip codes in data
-#train data/Area 5
-isFALSE(train_clean2$zip_code %in% area5_1 |train$zip_code %in% area5_2|train$zip_code %in% area5_3|train$zip_code %in% area5_4|train$zip_code %in% area5_5)
-#train data/Area 9
-isFALSE(train_clean2$zip_code %in% area9_1 |train$zip_code %in% area9_2|train$zip_code %in% area9_3|train$zip_code %in% area9_4|train$zip_code %in% area9_5|train$zip_code %in% area9_6|train$zip_code %in% area9_7|train$zip_code %in% area9_8|train$zip_code %in% area9_9)
-```
-
-
-```{r}
-#Create columns for train data based on the 5 and 9 area breakdowns above
-train_clean2=train_clean2 %>%
-  mutate(zip_area5 = case_when(
-    zip %in% area5_1 ~ 1,
-    zip %in% area5_2 ~ 2,
-    zip %in% area5_3 ~ 3,
-    zip %in% area5_4  ~ 4,
-    zip %in% area5_5  ~ 5), 
-    zip_area9 = case_when(
-    zip %in% area9_1 ~ 1,
-    zip %in% area9_2 ~ 2,
-    zip %in% area9_3 ~ 3,
-    zip %in% area9_4  ~ 4,
-    zip %in% area9_5  ~ 5,
-    zip %in% area9_6 ~ 6,
-    zip %in% area9_7 ~ 7,
-    zip %in% area9_8 ~ 8,
-    zip %in% area9_9 ~ 9))
-```
-
-
-##Number of Stations in zip code
-```{r}
-##Number of train stops
-onestop<-c(98125,98115,98134,98108)
-twostop<-c(98105,98101,98104,98144,98118,98188)
-train_clean2=train_clean2 %>%
-  mutate(numtrainstops = case_when(
-    zip %in% onestop ~ 1,
-    zip %in% twostop ~ 2,
-    TRUE~0))
-```
-
-```{r}
-head(train_clean2)
-```
-
-
-
-##### Functions
 
 ```{r 1-clean, message=FALSE, warning=FALSE, include=FALSE}
-# (after preliminary visualization, clean the data (filter out meaningless predictors and deal with missing values, outliers, and unbalanced classes)
-clean_data <- function(raw) { 
-  clean <- raw %>%
+# (after preliminary visualization), clean the data by filtering out meaningless 
+# predictors, removing missing values, factoring categorical predictors, 
+# filtering outliers, filtering or balancing unbalanced classes, and making
+# a proper transformations
+clean_data <- function(train, test) { 
+  
+  trainPr <- train %>%
     drop_na() %>%
-    filter(price < 4000000) %>%
-    transmute(zip   = factor(zip_code),
-              bed   = beds,
-              bath  = baths,
-              size  = size, 
-              lot   = if_else(lot_size_units == "acre", log(lot_size * 43560), log(lot_size)), 
-              price = price/1000)
-  return(clean)
-}
-
-clean_data2 <- function(raw) { 
-  clean <- raw %>%
-    impute(mean(raw$lot_size, na.rm=T)) %>%
-    filter(price < 3e6 & beds < 10) %>%
-    transmute(zip   = factor(zip_code),
-              bed   = beds,
-              bath  = baths,
-              size  = log(size), 
-              lot   = if_else(lot_size_units == "acre", log(lot_size * 43560), log(lot_size)), 
-              price = price/1000)
-  return(clean)
+    filter(price < 1e7) %>%
+    mutate(zip   = factor(zip_code),
+           lot = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price  = price/1000) %>%
+    filter( lot < 1e5) %>%
+    select(zip, beds, baths, size, lot, price)
+  
+  
+  testPr <- test %>%
+    drop_na() %>%
+    filter(price < 1e7) %>%
+    mutate(zip   = factor(zip_code),
+           lot = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price  = price/1000) %>%
+    filter( lot < 1e5) %>%
+    select(zip, beds, baths, size, lot, price)
+  return(list(train = trainPr, test = testPr))
 }
 ```
+
 
 
 ```{r 2-summarize, message=FALSE, warning=FALSE, include=FALSE}
 # produce many summary statistics and simple plots (some of the results such as correlations are saved in obj)
-summarize_data <- function(data, output = T) { 
-  vars <- colnames(data)
-  n    <- length(vars)
-  corr <- double(n-1)
-  par(mfrow=c(2,3))
+summarize_data <- function(obj, output = T) { 
+  train <- obj$train
+  vars  <- colnames(train)
+  obj$vars <- vars
+  n     <- length(train)
+  corr  <- double(n-1)
+  print(cor(train[,-1]))
   for (i in 2:(n-1)) {
-    corr[i] <- cor(data$price, data[, i])
+    corr[i] <- round(cor(train$price, train[, i]), 2)
     if (output) {
-      hist(data[, i],             xlab = vars[i], main = "")
-      plot(data$price, data[, i], xlab="price", ylab=vars[i])
-      plot(data$zip,   data[, i], xlab="price", ylab=vars[i])
-      cat(vars[i], corr[i], "\n")
+      plot(train[, i], train$price, xlab=vars[i], ylab="price")
+      plot(train$zip,   train[, i], xlab="zip", ylab=vars[i])
     }
   }
-  return(list(train = data, corr = corr, vars = vars))
+  corr[c(1,6)] <- 1
+  obj$corr     <- corr
+  return(obj)
 }
 ```
 
 
-
-```{r 3-transform, message=FALSE, warning=FALSE, include=FALSE}
-# apply the appropriate transformation to the predictors and save the residual after transformation for each predictor
- # (proper transform is found by applying many transformations in the exploratory analysis stage)
-transform_data <- function(obj) { 
-
- return(obj)
-}
-```
 
 ```{r dev}
 test    <- read.csv('test.csv')   
-train   <- read.csv('train.csv') %>%
-  clean_data() #%>%
+housing   <- read.csv('train.csv') %>%
+  clean_data(test) %>%
   summarize_data()
 ```
 
-```{r 4-model, message=FALSE, warning=FALSE, include=FALSE}
-# fit models (models are selected based on the results of exploratory analysis on train set)
-fit_model <- function(obj) { 
 
- return(obj)
-}
+
+```{r summary}
+names(housing$train)
+dim(housing$train)
+kableExtra::kable(summary(housing$train))
+unique(housing$train$size)
+unique(housing$train$lot)
+table(housing$train$zip)
 ```
 
 
 
-```{r 5-predict, message=FALSE, warning=FALSE, include=FALSE}
+```{r 3-model, message=FALSE, warning=FALSE, include=FALSE}
+# fit models (models are selected based on the results of exploratory analysis on train set)
+fit_model <- function(obj) {
+  obj$ols   <- lm(price~., data = obj$train)
+  #obj$wls  <- lm(price~., data = obj$train, weights = abs(obj$corr))
+  obj$rf    <- randomForest(price~., data = obj$train)
+  obj$gam   <- gam(price~s(size), family = "gaussian", data = obj$train)
+  obj$svm   <- svm(price~., data = obj$train, kernel = "radial", scale = FALSE)
+  obj$qRF <- quantregForest(subset(obj$train, select=-c(price)), obj$train$price)
+  #obj$ridge <- glmnet()
+  #obj$lasso <- glmnet()
+  return(obj)
+}
+```
+
+```{r}
+mod <- fit_model(housing)
+```
+
+
+
+```{r 4-predict, message=FALSE, warning=FALSE, include=FALSE}
 # given fitted models and test dataset, compute prediction
 predict_price <- function(obj) { 
+  obj$qRF <- predict(obj$qRF, what=c(.1, .25, .5, .75, .9), newdata=subset(obj$train, select=-c(price)))
 
- return(obj)
+  return(obj)
+}
+
+```
+
+```{r}
+#' Interval score function for prediction intervals, smaller value is better
+#' @description
+#' Interval score for prediction intervals
+#'
+#' @param predobj has 3 (or more) columns: pointprediction, predLB, predUB
+#' @param actual corresponding vector of actual values
+# (in holdout set, for example)
+#' @param level level for prediction interval, e.g., 0.5 or 0.8
+#' @return list with
+#' summary consisting of level, average length, interval score, coverage rate
+#' and
+#' imiss with cases where prediction intervals don't contain actual values
+#'
+intervalScore = function(predObj,actual,level)
+{ n = nrow(predObj)
+alpha = 1- level
+ilow = (actual<predObj[,2]) # overestimation
+ihigh = (actual>predObj[,3]) # underestimation
+sumlength = sum(predObj[,3]-predObj[,2]) # sum of lengths of prediction intervals
+sumlow = sum(predObj[ilow,2]-actual[ilow])*2/alpha
+sumhigh = sum(actual[ihigh]-predObj[ihigh,3])*2/alpha
+avglength = sumlength/n
+IS = (sumlength+sumlow+sumhigh)/n # average length + average under/over penalties
+cover = mean(actual>= predObj[,2] & actual<=predObj[,3])
+summ = c(level,avglength,IS,cover)
+# summary with level, average length, interval score, coverage rate
+imiss = which(ilow | ihigh)
+list(summary=summ, imiss=imiss)
 }
 ```
 
+```{r }
+pred <- predict_price(mod)
+IS50qRF <- intervalScore(pred$qRF[,c(3,2,4)], mod$test$price, 0.5)
+IS80qRF <- intervalScore(pred$qRF[,c(3,1,5)], mod$test$price, 0.8)
+outqRF <- rbind(IS50qRF$summary, IS80qRF$summary)
+colnames(outqRF) = c("level", "avgleng", "IS", "cover")
+print(outqRF)
+```
 
 
-```{r 6-validate, message=FALSE, warning=FALSE, include=FALSE}
+```{r 5-validate, message=FALSE, warning=FALSE, include=FALSE}
 # using all models and holdout predictions, compute diagnostic measures 
-validate_model <- function(obj) { 
+#validate_model <- function(obj) { 
 
- return(obj)
-}
+# return(obj)
+#}
 ```
 
 
 
-```{r 7-select, message=FALSE, warning=FALSE, include=FALSE}
+```{r 6-select, message=FALSE, warning=FALSE, include=FALSE}
 # based on the diagnostics computed in the validation stage, select the best performer
-select_model <- function(obj) { 
+#select_model <- function(obj) { 
 
- return(obj)
-}
+# return(obj)
+#}
 ```
 
 
 
 ```{r main, message=FALSE, warning=FALSE, include=FALSE}
-main <- function(train, test) {
-  
-  analysis   <- train %>%
-    clean_data() %>%                                          # 1. clean
-    summarize_data(output = F) %>%                              # 2. summarize 
-    transform_data() %>%                                        # 3. transform
-    fit_model() %>%                                             # 4. model
-    predict_price(test) %>%                                     # 5. predict
-    validate_model() %>%                                        # 6. validate
-    select_model() %>%                                          # 7. select
-  
-  return(list(trainR    = analysis$train,
-              trainT    = analysis$trainT,
-              testR     = analysis$test,
-              testT     = analysis$testT,
-              models    = analysis$models,
-              preds50   = analysis$preds50,
-              preds80   = analysis$preds80,
-              best      = analysis$best))
-}
+# main <- function(train, test) {
+#   
+#   analysis   <- train %>%
+#     clean_data() %>%                                          # 1. clean
+#     summarize_data(output = F) %>%                              # 2. summarize 
+#     fit_model() %>%                                             # 3. model
+#     predict_price(test) %>%                                     # 4. predict
+#     validate_model() %>%                                        # 5. validate
+#     select_model() %>%                                          # 6. select
+#   
+#   return(list(trainR    = analysis$train,
+#               trainT    = analysis$trainT,
+#               testR     = analysis$test,
+#               testT     = analysis$testT,
+#               models    = analysis$models,
+#               preds50   = analysis$preds50,
+#               preds80   = analysis$preds80,
+#               best      = analysis$best))
+# }
 ```
+
 
 
 
@@ -476,7 +218,7 @@ main <- function(train, test) {
 ##### Data:
 
 
-##### Preprocessing:
+##### Precleaning:
 
 
  
@@ -490,9 +232,9 @@ main <- function(train, test) {
 
 
 ```{r run, echo=FALSE, message=FALSE, warning=FALSE}
-test    <- read.csv('test.csv')   
-train   <- read.csv('train.csv') 
-output  <- main(train, test)
+# test    <- read.csv('test.csv')   
+# train   <- read.csv('train.csv') 
+# output  <- main(train, test)
 ```
 
 
@@ -508,7 +250,6 @@ output  <- main(train, test)
 ```{r plots, echo=FALSE, message=FALSE, warning=FALSE}
 
 ```
-
 
 
 
