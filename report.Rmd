@@ -1,0 +1,53 @@
+---
+title: "Seattle Housing Price Analysis"
+author: "Parham Pishrobat (71097927), Asen Lee (97629497), Manya Chalis"
+date: "2023-04-05"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Abstract
+
+### Background
+The housing market is known for its volatility, and we aim to analyze different aspects that may affect housing prices. Specifically, we seek to predict housing prices in Seattle, which is known to be 50% higher than the average for the cities in the Unites States.
+
+### Methods
+We conducted multiple linear regression as the baseline model as it is easy to implement/interpret. We then created models for Support Vector Regression to handle non-linear relationships and outliers, and Quantile Regression Random Forest to achieve precise prediction intervals and to overcome heteroscedasticity. Further, we experimented with Gradient Boosting Regression to improve model performance through iterative optimization and deal with missing data.
+
+### Results
+
+
+### Conclusions
+
+
+
+
+## Data Transformation
+
+The dataset contains a total of 2521 properties, and it was split 80/20 for train and test data. There are a total of 8 variables - 1 response variable and 7 explanatory variables. The explanatory variables consist of: `beds` - number of bedrooms in property (integer), `baths` - number of bathrooms in property (double), `size` - total floor area of property (double), `size_unit` - units of the floor area measurement (character), `lot_size` - total area of land (double), `lot_size_units` - units of lot size measurement (character), and `zip_code` - the associated zip-code of the property (integer). The response variable `price` is the price of the property in USD.
+
+Upon initial exploratory data analysis, we noticed that `size_units` could be dropped as there is only one unit - sqft. We posited to also drop `lot_size_units` by converting `lot_size` in acres to sqft (`lot_size` * 435600), and we removed records with missing values for `lot_size`. Next, we posited to log transform `lot_size` and `price` and square root transform for `size`, `beds`, and `baths` to achieve homoscedasticity for the variables. Moreover, `zip_code` was binned into 7 distinct areas proposed by the city of Seattle to mitigate the class-imbalance caused by 28 unique zip-code values in the dataset.
+
+
+
+
+## Methods
+
+
+
+
+## Results
+
+
+
+
+## Contributions
+
+
+
+
+## Apendix
+
