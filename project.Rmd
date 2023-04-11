@@ -20,33 +20,30 @@ library(quantregForest)
 ```
 
 
-
 ```{r 1-clean, message=FALSE, warning=FALSE, include=FALSE}
 # (after preliminary visualization), clean the data by filtering out meaningless 
 # predictors, removing missing values, factoring categorical predictors, 
 # filtering outliers, filtering or balancing unbalanced classes, and making
 # a proper transformations
 clean_data <- function(train, test) { 
-  
-  trainPr <- train %>%
+  trainC <- train %>%
     drop_na() %>%
     filter(price < 1e7) %>%
     mutate(zip   = factor(zip_code),
-           lot = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
-           price  = price/1000) %>%
+           lot   = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price = price/1000) %>%
     filter( lot < 1e5) %>%
     select(zip, beds, baths, size, lot, price)
-  
-  
-  testPr <- test %>%
+  testC <- test %>%
     drop_na() %>%
     filter(price < 1e7) %>%
-    mutate(zip   = factor(zip_code),
-           lot = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
-           price  = price/1000) %>%
+    mutate(zip   = factor(zip_code, levels = levels(trainC$zip)),
+           lot   = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price = price/1000) %>%
+    drop_na() %>%
     filter( lot < 1e5) %>%
     select(zip, beds, baths, size, lot, price)
-  return(list(train = trainPr, test = testPr))
+  return(list(train = trainC, test = testC))
 }
 ```
 
@@ -64,8 +61,8 @@ summarize_data <- function(obj, output = T) {
   for (i in 2:(n-1)) {
     corr[i] <- round(cor(train$price, train[, i]), 2)
     if (output) {
-      plot(train[, i], train$price, xlab=vars[i], ylab="price")
-      plot(train$zip,   train[, i], xlab="zip", ylab=vars[i])
+      plot(train[, i],  train$price, xlab=vars[i], ylab="price")
+      plot(train$zip,   train[, i],  xlab="zip", ylab=vars[i])
     }
   }
   corr[c(1,6)] <- 1
@@ -77,54 +74,96 @@ summarize_data <- function(obj, output = T) {
 
 
 ```{r dev}
-test    <- read.csv('test.csv')   
-housing   <- read.csv('train.csv') %>%
-  clean_data(test) %>%
-  summarize_data()
-```
-
-
-
-```{r summary}
-names(housing$train)
-dim(housing$train)
-kableExtra::kable(summary(housing$train))
-unique(housing$train$size)
-unique(housing$train$lot)
-table(housing$train$zip)
-```
-
-
-
-```{r 3-model, message=FALSE, warning=FALSE, include=FALSE}
-# fit models (models are selected based on the results of exploratory analysis on train set)
-fit_model <- function(obj) {
-  obj$ols   <- lm(price~., data = obj$train)
-  #obj$wls  <- lm(price~., data = obj$train, weights = abs(obj$corr))
-  obj$rf    <- randomForest(price~., data = obj$train)
-  obj$gam   <- gam(price~s(size), family = "gaussian", data = obj$train)
-  obj$svm   <- svm(price~., data = obj$train, kernel = "radial", scale = FALSE)
-  obj$qRF <- quantregForest(subset(obj$train, select=-c(price)), obj$train$price)
-  #obj$ridge <- glmnet()
-  #obj$lasso <- glmnet()
-  return(obj)
-}
+dat   <- clean_data(read.csv('train.csv'), read.csv('test.csv'))
+train <- dat$train
+test  <- dat$test
 ```
 
 ```{r}
-mod <- fit_model(housing)
+summarize_data(dat)
 ```
 
 
+```{r ols}
+ols <- function(train, test) {
+  mod   <- lm(price~., data = train)
+  preds <- predict(mod, newdata = test)
+  plot(mod$fitted.values, mod$residuals, ylim = c(-3000, 3000), pch = 16)
+  return(list(model = mod, preds = preds))
+}
+olsMod <- ols(train, test)
+```
+Heteroscedasiticity apparent
 
-```{r 4-predict, message=FALSE, warning=FALSE, include=FALSE}
-# given fitted models and test dataset, compute prediction
-predict_price <- function(obj) { 
-  obj$qRF <- predict(obj$qRF, what=c(.1, .25, .5, .75, .9), newdata=subset(obj$train, select=-c(price)))
-
-  return(obj)
+```{r wls}
+wls <- function(train, test) {
+  price <- sort(train$price)
+  pRange <- diff(range(price)) / 10
+  len    <- length(price)
+  w     <<- double(len)
+  r     <<- floor((train$price - min(price))/pRange) / 10
+  for (i in 1:len) {
+    w[i] <<- 1/sd(price[floor((r[i])*len)+1:floor((r[i]+1)*len)])
+  }
+  mod   <- lm(price~., data = train, weights = w)
+  preds <- predict(mod, newdata = test)
+  plot(mod$fitted.values, mod$residuals, ylim = c(-3000, 3000), pch = 16)
+  return(list(model = mod, preds = preds))
 }
 
+wlsMod <- wls(train, test)
+```
+
+Heteroscedasiticity removed
+
+
+```{r ridge}
+ridge <- function(train, test) {
+  Y <- train$price
+  X <- train %>% select(-price, -zip) %>% as.matrix()
+  cv_mod <- cv.glmnet(x=X, y=Y, alpha=0, standardize = TRUE)
+  best_lambda <- cv_mod$lambda.min
+  mod <- glmnet(X, Y, alpha=0, lambda=best_lambda)
+  
+  newX <- test %>% select(-price, -zip) %>% as.matrix()
+  preds <- predict(mod, s=best_lambda, newx=newX)
+  return(list(model = mod, preds = preds))
+}
+
+ridgeMod <- ridge(train, test)
+```
+
+
+```{r lasso}
+lasso <- function(train, test) {
+  Y <- train$price
+  X <- train %>% select(-price, -zip) %>% as.matrix()
+  cv_mod <- cv.glmnet(x=X, y=Y, alpha=1, standardize = TRUE)
+  best_lambda <- cv_mod$lambda.min
+  mod <- glmnet(X, Y, alpha=1, lambda=best_lambda)
+  
+  newX <- test %>% select(-price, -zip) %>% as.matrix()
+  preds <- predict(mod, s=best_lambda, newx=newX)
+  return(list(model = mod, preds = preds))
+}
+
+lassoMod <- lasso(train, test)
+```
+
+
+```{r qRF}
+qRF <- function(train, test) {
+  Y <- train$price
+  X <- train %>% select(-price, -zip)
+  mod <- quantregForest(X, Y)
+  
+  # 50%, 80% prediction intervals
+  newX <- test %>% select(-price, -zip)
+  preds <- predict(mod, what=c(.1, .25, .5, .75, .9), newdata=newX)
+  return(list(model = mod, preds = preds))
+}
+
+qRFMod <- qRF(train, test)
 ```
 
 ```{r}
@@ -157,16 +196,29 @@ summ = c(level,avglength,IS,cover)
 imiss = which(ilow | ihigh)
 list(summary=summ, imiss=imiss)
 }
-```
 
-```{r }
-pred <- predict_price(mod)
-IS50qRF <- intervalScore(pred$qRF[,c(3,2,4)], mod$test$price, 0.5)
-IS80qRF <- intervalScore(pred$qRF[,c(3,1,5)], mod$test$price, 0.8)
+IS50qRF <- intervalScore(qRFMod$preds[,c(3,2,4)], test$price, 0.5)
+IS80qRF <- intervalScore(qRFMod$preds[,c(3,1,5)], test$price, 0.8)
 outqRF <- rbind(IS50qRF$summary, IS80qRF$summary)
 colnames(outqRF) = c("level", "avgleng", "IS", "cover")
 print(outqRF)
 ```
+
+
+
+
+
+
+
+```{r 4-predict, message=FALSE, warning=FALSE, include=FALSE}
+# given fitted models and test dataset, compute prediction
+predict_price <- function(obj) { 
+
+  return(obj)
+}
+
+```
+
 
 
 ```{r 5-validate, message=FALSE, warning=FALSE, include=FALSE}
