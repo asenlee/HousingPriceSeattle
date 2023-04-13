@@ -21,125 +21,140 @@ library(caret)
 ```
 
 
+```{r 0-load, message=FALSE, warning=FALSE, include=FALSE}
+load_data <- function() {
+  training   <- read.csv('train.csv')
+  testing    <- read.csv('test.csv')
+  return(list(training = training, testing = testing))
+}
+dat   <- load_data()
+```
+
+
 
 ```{r 1-clean, message=FALSE, warning=FALSE, include=FALSE}
 # (after preliminary visualization), clean the data by filtering out meaningless 
 # predictors, removing missing values, factoring categorical predictors, 
 # filtering outliers, filtering or balancing unbalanced classes, and making
 # a proper transformations
-clean_data <- function(train, test) { 
-  trainC <- train %>%
+clean_data <- function(dat) { 
+  trainingC <- dat$training %>%
     drop_na() %>%
-    filter(price < 1e7) %>%
+    filter(price < 1e7 & lot_size_units != "acre") %>%
     mutate(zip   = factor(zip_code),
-           lot   = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
-           price = price/1000) %>%
+           lot = lot_size,
+           price = sqrt(price)) %>%
     filter( lot < 1e5) %>%
     select(zip, beds, baths, size, lot, price)
-  testC <- test %>%
+  testingC <- dat$testing %>%
     drop_na() %>%
-    filter(price < 1e7) %>%
-    mutate(zip   = factor(zip_code, levels = levels(trainC$zip)),
-           lot   = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
-           price = price/1000) %>%
-    drop_na() %>%
+    filter(price < 1e7 & lot_size_units != "acre") %>%
+    mutate(zip   = factor(zip_code, levels = levels(trainingC$zip)),
+           lot = lot_size,
+           price = sqrt(price)) %>%
     filter( lot < 1e5) %>%
     select(zip, beds, baths, size, lot, price)
-  return(list(train = trainC, test = testC))
+  return(list(training = trainingC, testing = testingC))
 }
+dat   <- clean_data(dat)
+training <- dat$training
+testing  <- dat$testing
 ```
 
 
 
-```{r 2-summarize, message=FALSE, warning=FALSE, include=FALSE}
+```{r 2-summarize, echo=FALSE, message=FALSE, warning=FALSE}
 # produce many summary statistics and simple plots (some of the results such as correlations are saved in obj)
-summarize_data <- function(obj, output = T) { 
-  train <- obj$train
-  vars  <- colnames(train)
-  obj$vars <- vars
-  n     <- length(train)
+summarize_data <- function(training, output = T) {
+  vars  <- colnames(training)
+  n     <- ncol(training)
   corr  <- double(n-1)
-  print(cor(train[,-1]))
+  print(cor(training[,-1]))
   for (i in 2:(n-1)) {
-    corr[i] <- round(cor(train$price, train[, i]), 2)
+    corr[i] <- round(cor(training$price, training[, i]), 2)
     if (output) {
-      plot(train$price, train[, i], xlab="price", ylab=vars[i])
-      plot(train$zip,   train[, i], xlab="price", ylab=vars[i])
+      plot(training[, i], training$price, ylab="price", xlab=vars[i])
+      plot(training$zip,   training[, i], xlab="zipcode", ylab=vars[i])
     }
   }
-  corr[c(1,6)] <- 1
-  obj$corr     <- corr
-  return(obj)
+  corr[1] <- 1
+  return(list(corr = corr, vars = vars))
 }
+res <- summarize_data(training, output = T)
 ```
 
 
 
-```{r dev}
-dat   <- clean_data(read.csv('train.csv'), read.csv('test.csv'))
-train <- dat$train
-test  <- dat$test
-```
 
 
-```{r}
-plot_model <- function(train, fitted, test, preds) {
-  varNames <- colnames(train)
+```{r 3-plot model, message=FALSE, warning=FALSE, include=FALSE}
+plot_model <- function(training, fitted, testing, preds) {
+  varNames <- colnames(training)
   par(mfrow = c(1, 2))
   for (i in 4:5) {
-    plot(train[, i],  fitted - train$price,             # residuals vs predictors plots
+    plot(training[, i],  fitted - training$price,             # residuals vs predictors plots
          xlab = varNames[i], ylab = "Residuals",
          main = paste("Residual vs", varNames[i]),
-         ylim = c(-2000, 2000), pch = 16, cex = 0.5)
+         ylim = c(-1000, 1000), pch = 16, cex = 0.5)
   }
-  plot(fitted, train$price, 
+  plot(fitted, training$price, 
        xlab = "Fitted Values", ylab = "Observed",
        main = "Observed vs Fitted Values",
-       xlim = c(0, 3000),  ylim = c(0, 3000), pch = 16, cex = 0.5)
-  lines(seq(1,4000), seq(1,4000), type = "l", col = "red")
-  plot(preds, test$price, 
+       xlim = c(0, 2000),  ylim = c(0, 2000), pch = 16, cex = 0.5)
+  lines(seq(1,2000), seq(1,2000), type = "l", col = "red")
+  plot(preds, testing$price, 
        xlab = "Predicted", ylab = "Actual",
        main = "Predictions vs Actual Values",
-       xlim = c(0, 4000),  ylim = c(0, 4000), pch = 16, cex = 0.5)
-  lines(seq(1,4000), seq(1,4000), type = "l", col = "red")
+       xlim = c(0, 2000),  ylim = c(0, 2000), pch = 16, cex = 0.5)
+  lines(seq(1,2000), seq(1,2000), type = "l", col = "red")
+  plot(training$price, training$price - fitted, 
+       xlab = "Predicted", ylab = "Actual",
+       main = "Predictions vs Actual Values",
+       ylim = c(-1000, 1000), pch = 16, cex = 0.5)
   x <- rnorm(100)
   qqnorm(x, main = "QQ Plot of Random Normal Data", col = "blue")
   qqline(x, col = "red")
   par(mfrow = c(1, 2))
-  hist(train$price, main = "Train Data Distribution")
-  hist(test$price, main == "Test Data Distribution")
+  hist(training$price, main = "training Data Distribution")
+  hist(testing$price, main = "testing Data Distribution")
 
 }
 ```
 
-```{r ols}
-ols <- function(train, test) {
-  mod   <- lm(price~., data = train)
-  preds <- predict(mod, newdata = test)
-  plot_model(train, mod$fitted.values, test, preds)
-  return(list(model = mod, preds = preds))
-}
-olsMod <- ols(train, test)
-```
-Heteroscedasiticity apparent
 
-```{r wls}
-wls <- function(train, test) {
-  priceW <- sort(train$price)
+
+```{r 4.1-model ols, echo=FALSE, message=FALSE, warning=FALSE}
+ols <- function(training, testing) {
+  mod   <- lm(price~., data = training)
+  preds80 <- predict(mod, newdata = testing, interval="predict", level=0.8)
+  preds50 <- predict(mod, newdata = testing, interval="predict", level=0.5)
+  plot_model(training, mod$fitted.values, testing, preds50[, 1])
+  return(list(model = mod, preds50 = preds50, preds80 = preds80))
+}
+olsMod <- ols(training, testing)
+```
+
+
+
+
+```{r 4.2-model wls, echo=FALSE, message=FALSE, warning=FALSE}
+wls <- function(training, testing) {
+  priceW <- sort(training$price)
   pRange <- diff(range(priceW)) 
   len    <- length(priceW)
-  w     <<- double(len)
-  r     <<- (train$price - min(priceW))/pRange
+  w      <- double(len)
+  r      <- (training$price - min(priceW))/pRange
   for (i in 1:len) {
-    w[i] <<- 1/sd(priceW[max((floor((r[i]-0.1)*len)), 1):min(floor((r[i]+0.1)*len), len)])
+    w[i] <- 1/sd(priceW[max((floor((r[i]-0.1)*len)), 1):min(floor((r[i]+0.1)*len), len)])
   }
 
-  mod   <- lm(price~., data = train, weights = w)
-  preds <- predict(mod, newdata = test)
-  plot_model(train, mod$fitted.values, test, preds)
-  return(list(model = mod, preds = preds))
+  mod   <- lm(price~., data = training, weights = w)
+  preds80 <- predict(mod, newdata = testing, interval="predict", level=0.8)
+  preds50 <- predict(mod, newdata = testing, interval="predict", level=0.5)
+  plot_model(training, mod$fitted.values, testing, preds50[, 1])
+  return(list(model = mod, preds50 = preds50, preds80 = preds80))
 }
-wlsMod <- wls(train, test)
+wlsMod <- wls(training, testing)
 ```
 
 Heteroscedasiticity removed
@@ -149,32 +164,31 @@ Heteroscedasiticity removed
 
 
 ```{r wls}
-grb <- function(train, test) {
-  mod     <- gbm(price ~ ., data = train, n.trees = 1000, shrinkage = 0.1, interaction.depth = 3,  verbose = TRUE)
-  preds   <- predict(mod, newdata = test)
-  plot_model(train, mod$fit, test, preds) 
-  return(list(model = mod, preds = preds))
+grb <- function(training, testing) {
+  mod     <- gbm(price ~ ., data = training, n.trees = 1000, shrinkage = 0.1, interaction.depth = 3)
+  preds80 <- predict(mod, newdata = testing, type = "response", se.fit = TRUE, interval="prediction", level=0.8)
+  preds50 <- predict(mod, newdata = testing, type = "response", se.fit = TRUE, interval="prediction", level=0.5)
+  plot_model(training, mod$fit, testing, preds50) 
+  return(list(model = mod, preds50 = preds50, preds80 = preds80))
 }
-grbMod <- grb(train, test)
+grbMod <- grb(training, testing)
 ```
 
 
 ```{r wls}
-eln <- function(train, test) {
-  mod <- gbm(price ~ ., data = train, n.trees = 1000, shrinkage = 0.5, interaction.depth = 4,  verbose = TRUE)
+eln <- function(training, testing) {
+  mod <- gbm(price ~ ., data = training, n.trees = 1000, shrinkage = 0.5, interaction.depth = 4,  verbose = TRUE)
 
-  preds <- predict(mod, newdata = test)
-  plot(mod$fit, train$price - mod$fit, ylim = c(-3000, 3000), pch = 16)
-  plot(preds, test$price - preds, xlim = c(0, 3000),  ylim = c(-4000, 4000), pch = 16)
+  preds <- predict(mod, newdata = testing)
   return(list(model = mod))#, preds = preds))
 }
-grbMod <- grb(train, test)
+grbMod <- grb(training, testing)
 ```
 
 
 
 ```{r 4-predict, message=FALSE, warning=FALSE, include=FALSE}
-# given fitted models and test dataset, compute prediction
+# given fitted models and testing dataset, compute prediction
 #predict_price <- function(obj) { 
 #
 # return(obj)
@@ -204,20 +218,20 @@ grbMod <- grb(train, test)
 
 
 ```{r main, message=FALSE, warning=FALSE, include=FALSE}
-# main <- function(train, test) {
+# main <- function(training, testing) {
 #   
-#   analysis   <- train %>%
+#   analysis   <- training %>%
 #     clean_data() %>%                                          # 1. clean
 #     summarize_data(output = F) %>%                              # 2. summarize 
 #     fit_model() %>%                                             # 3. model
-#     predict_price(test) %>%                                     # 4. predict
+#     predict_price(testing) %>%                                     # 4. predict
 #     validate_model() %>%                                        # 5. validate
 #     select_model() %>%                                          # 6. select
 #   
-#   return(list(trainR    = analysis$train,
-#               trainT    = analysis$trainT,
-#               testR     = analysis$test,
-#               testT     = analysis$testT,
+#   return(list(trainingR    = analysis$training,
+#               trainingT    = analysis$trainingT,
+#               testingR     = analysis$testing,
+#               testingT     = analysis$testingT,
 #               models    = analysis$models,
 #               preds50   = analysis$preds50,
 #               preds80   = analysis$preds80,
@@ -246,9 +260,9 @@ grbMod <- grb(train, test)
 
 
 ```{r run, echo=FALSE, message=FALSE, warning=FALSE}
-# test    <- read.csv('test.csv')   
-# train   <- read.csv('train.csv') 
-# output  <- main(train, test)
+# testing    <- read.csv('test.csv')   
+# training   <- read.csv('train.csv') 
+# output  <- main(training, testing)
 ```
 
 
