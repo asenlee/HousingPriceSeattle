@@ -16,6 +16,8 @@ library(randomForest)
 library(glmnet)
 library(mgcv)
 library(e1071)
+library(gbm)
+library(caret)
 ```
 
 
@@ -80,12 +82,41 @@ test  <- dat$test
 ```
 
 
+```{r}
+plot_model <- function(train, fitted, test, preds) {
+  varNames <- colnames(train)
+  par(mfrow = c(1, 2))
+  for (i in 4:5) {
+    plot(train[, i],  fitted - train$price,             # residuals vs predictors plots
+         xlab = varNames[i], ylab = "Residuals",
+         main = paste("Residual vs", varNames[i]),
+         ylim = c(-2000, 2000), pch = 16, cex = 0.5)
+  }
+  plot(fitted, train$price, 
+       xlab = "Fitted Values", ylab = "Observed",
+       main = "Observed vs Fitted Values",
+       xlim = c(0, 3000),  ylim = c(0, 3000), pch = 16, cex = 0.5)
+  lines(seq(1,4000), seq(1,4000), type = "l", col = "red")
+  plot(preds, test$price, 
+       xlab = "Predicted", ylab = "Actual",
+       main = "Predictions vs Actual Values",
+       xlim = c(0, 4000),  ylim = c(0, 4000), pch = 16, cex = 0.5)
+  lines(seq(1,4000), seq(1,4000), type = "l", col = "red")
+  x <- rnorm(100)
+  qqnorm(x, main = "QQ Plot of Random Normal Data", col = "blue")
+  qqline(x, col = "red")
+  par(mfrow = c(1, 2))
+  hist(train$price, main = "Train Data Distribution")
+  hist(test$price, main == "Test Data Distribution")
+
+}
+```
 
 ```{r ols}
 ols <- function(train, test) {
   mod   <- lm(price~., data = train)
   preds <- predict(mod, newdata = test)
-  plot(mod$fitted.values, mod$residuals, ylim = c(-3000, 3000), pch = 16)
+  plot_model(train, mod$fitted.values, test, preds)
   return(list(model = mod, preds = preds))
 }
 olsMod <- ols(train, test)
@@ -94,23 +125,52 @@ Heteroscedasiticity apparent
 
 ```{r wls}
 wls <- function(train, test) {
-  price <- sort(train$price)
-  pRange <- diff(range(price)) / 10
-  len    <- length(price)
+  priceW <- sort(train$price)
+  pRange <- diff(range(priceW)) 
+  len    <- length(priceW)
   w     <<- double(len)
-  r     <<- floor((train$price - min(price))/pRange) / 10
+  r     <<- (train$price - min(priceW))/pRange
   for (i in 1:len) {
-    w[i] <<- 1/sd(price[floor((r[i])*len)+1:floor((r[i]+1)*len)])
+    w[i] <<- 1/sd(priceW[max((floor((r[i]-0.1)*len)), 1):min(floor((r[i]+0.1)*len), len)])
   }
+
   mod   <- lm(price~., data = train, weights = w)
   preds <- predict(mod, newdata = test)
-  plot(mod$fitted.values, mod$residuals, ylim = c(-3000, 3000), pch = 16)
+  plot_model(train, mod$fitted.values, test, preds)
   return(list(model = mod, preds = preds))
 }
 wlsMod <- wls(train, test)
 ```
 
 Heteroscedasiticity removed
+
+
+
+
+
+```{r wls}
+grb <- function(train, test) {
+  mod     <- gbm(price ~ ., data = train, n.trees = 1000, shrinkage = 0.1, interaction.depth = 3,  verbose = TRUE)
+  preds   <- predict(mod, newdata = test)
+  plot_model(train, mod$fit, test, preds) 
+  return(list(model = mod, preds = preds))
+}
+grbMod <- grb(train, test)
+```
+
+
+```{r wls}
+eln <- function(train, test) {
+  mod <- gbm(price ~ ., data = train, n.trees = 1000, shrinkage = 0.5, interaction.depth = 4,  verbose = TRUE)
+
+  preds <- predict(mod, newdata = test)
+  plot(mod$fit, train$price - mod$fit, ylim = c(-3000, 3000), pch = 16)
+  plot(preds, test$price - preds, xlim = c(0, 3000),  ylim = c(-4000, 4000), pch = 16)
+  return(list(model = mod))#, preds = preds))
+}
+grbMod <- grb(train, test)
+```
+
 
 
 ```{r 4-predict, message=FALSE, warning=FALSE, include=FALSE}
