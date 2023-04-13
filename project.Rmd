@@ -84,16 +84,35 @@ summarize_data(dat)
 ```
 
 
+
+
 ```{r ols}
 ols <- function(train, test) {
   mod   <- lm(price~., data = train)
   preds <- predict(mod, newdata = test)
+  preds80 <- predict(mod, newdata = test, interval="predict", level=0.8)
+  preds50 <- predict(mod, newdata = test, interval="predict", level=0.5)
   plot(mod$fitted.values, mod$residuals, ylim = c(-3000, 3000), pch = 16)
-  return(list(model = mod, preds = preds))
+  return(list(model = mod, preds=preds,preds80 = preds80, preds50=preds50))
 }
 olsMod <- ols(train, test)
 ```
 Heteroscedasiticity apparent
+
+```{r}
+library(ggplot2)
+
+data <- test %>% select(-c(zip))
+all_data <- cbind(data, olsMod$preds50)
+
+#create plot
+ggplot(all_data, aes(x = data$price, y = fit)) + #define x and y axis variables
+    geom_point() + #add scatterplot points
+    stat_smooth(method = lm) + #confidence bands
+    geom_line(aes(y = lwr), col = "coral2", linetype = "dashed") + #lwr pred interval
+    geom_line(aes(y = upr), col = "coral2", linetype = "dashed") #upr pred interval
+```
+
 
 ```{r wls}
 wls <- function(train, test) {
@@ -105,16 +124,31 @@ wls <- function(train, test) {
   for (i in 1:len) {
     w[i] <<- 1/sd(price[floor((r[i])*len)+1:floor((r[i]+1)*len)])
   }
+  
   mod   <- lm(price~., data = train, weights = w)
-  preds <- predict(mod, newdata = test)
+  preds80 <- predict(mod, newdata = test, interval="predict", level=0.8)
+  preds50 <- predict(mod, newdata = test, interval="predict", level=0.5)
   plot(mod$fitted.values, mod$residuals, ylim = c(-3000, 3000), pch = 16)
-  return(list(model = mod, preds = preds))
+  return(list(model = mod, preds50 = preds50, preds80=preds80))
 }
 
 wlsMod <- wls(train, test)
 ```
 
 Heteroscedasiticity removed
+
+```{r}
+data <- test %>% select(-c(zip))
+all_data <- cbind(data, wlsMod$preds80)
+
+#create plot
+ggplot(all_data, aes(x = beds, y = price)) + #define x and y axis variables
+    geom_point() + #add scatterplot points
+    stat_smooth(method = lm) + #confidence bands
+    geom_line(aes(y = lwr), col = "coral2", linetype = "dashed") + #lwr pred interval
+    geom_line(aes(y = upr), col = "coral2", linetype = "dashed") #upr pred interval
+```
+
 
 
 ```{r ridge}
@@ -127,11 +161,30 @@ ridge <- function(train, test) {
   
   newX <- test %>% select(-price, -zip) %>% as.matrix()
   preds <- predict(mod, s=best_lambda, newx=newX)
+  plot(cv_mod)
   return(list(model = mod, preds = preds))
 }
 
 ridgeMod <- ridge(train, test)
+assess.glmnet(ridgeMod$preds, newy = test$price)
 ```
+
+```{r}
+ridgeMod$preds
+```
+
+
+
+```{r}
+library(ciTools)
+library(trending)
+
+ridgePI50 <- add_pi(test, ridgeMod$model, names=c("lower", "upper"), alpha=0.25, nsims=20000)
+ridgePI80 <- add_pi(test, ridgeMod$model, names=c("lower", "upper"), alpha=0.1, nsims=20000)
+ridgePI80
+```
+
+
 
 
 ```{r lasso}
@@ -139,20 +192,23 @@ lasso <- function(train, test) {
   Y <- train$price
   X <- train %>% select(-price, -zip) %>% as.matrix()
   cv_mod <- cv.glmnet(x=X, y=Y, alpha=1, standardize = TRUE)
-  best_lambda <- cv_mod$lambda.min
-  mod <- glmnet(X, Y, alpha=1, lambda=best_lambda)
+  mod <- glmnet(X, Y, alpha=1, lambda=cv_mod$lambda.min)
   
   newX <- test %>% select(-price, -zip) %>% as.matrix()
-  preds <- predict(mod, s=best_lambda, newx=newX)
+  preds <- predict(mod, s='lambda.min', newx=newX)
+  plot(cv_mod)
   return(list(model = mod, preds = preds))
 }
 
 lassoMod <- lasso(train, test)
+
+assess.glmnet(lassoMod$preds, newy = test$price)
 ```
 
 
 ```{r qRF}
 qRF <- function(train, test) {
+  set.seed(447)
   Y <- train$price
   X <- train %>% select(-price, -zip)
   mod <- quantregForest(X, Y)
@@ -204,7 +260,23 @@ colnames(outqRF) = c("level", "avgleng", "IS", "cover")
 print(outqRF)
 ```
 
+```{r}
+# prediction intervals for ols
+IS50ols <- intervalScore(olsMod$preds50, test$price, 0.5)
+IS80ols <- intervalScore(olsMod$preds80, test$price, 0.8)
+outOls <- rbind(IS50ols$summary, IS80ols$summary)
+colnames(outOls) = c("level", "avgleng", "IS", "cover")
+print(outOls)
+```
 
+```{r}
+# prediction intervals for wls
+IS50wls <- intervalScore(wlsMod$preds50, test$price, 0.5)
+IS80wls <- intervalScore(wlsMod$preds80, test$price, 0.8)
+outWls <- rbind(IS50wls$summary, IS80wls$summary)
+colnames(outWls) = c("level", "avgleng", "IS", "cover")
+print(outWls)
+```
 
 
 
