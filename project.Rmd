@@ -56,9 +56,34 @@ clean_data <- function(dat) {
     select(zip, beds, baths, size, lot, price)
   return(list(training = trainingC, testing = testingC))
 }
+
+clean_data2 <- function(dat) { 
+  trainingC <- dat$training %>%
+    drop_na() %>%
+    filter(price < 1e7) %>%
+    mutate(zip   = factor(zip_code),
+           lot   = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price = price/1000) %>%
+    filter( lot < 1e5) %>%
+    select(zip, beds, baths, size, lot, price)
+  testingC <- dat$testing %>%
+    drop_na() %>%
+    filter(price < 1e7) %>%
+    mutate(zip   = factor(zip_code, levels = levels(trainingC$zip)),
+           lot   = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price = price/1000) %>%
+    drop_na() %>%
+    filter( lot < 1e5) %>%
+    select(zip, beds, baths, size, lot, price)
+  return(list(training = trainingC, testing = testingC))
+}
+
+
 dat   <- clean_data(dat)
 training <- dat$training
 testing  <- dat$testing
+
+
 ```
 
 
@@ -145,27 +170,51 @@ wls <- function(training, testing) {
   w      <- double(len)
   r      <- (training$price - min(priceW))/pRange
   for (i in 1:len) {
-    w[i] <- 1/sd(priceW[max((floor((r[i]-0.1)*len)), 1):min(floor((r[i]+0.1)*len), len)])
+    w[i] <- 1/sd(priceW[max((floor((r[i]-0.05)*len)), 1):min(floor((r[i]+0.05)*len), len)])
+  }
+  
+  
+  priceWT <- sort(testing$price)
+  pRangeT <- diff(range(priceWT)) 
+  lenT    <- length(priceWT)
+  wT      <- double(lenT)
+  rT      <- (testing$price - min(priceWT))/pRangeT
+  for (i in 1:lenT) {
+    wT[i] <- 1/sd(priceWT[max((floor((rT[i]-0.05)*lenT)), 1):min(floor((rT[i]+0.05)*lenT), lenT)])
   }
 
   mod   <- lm(price~., data = training, weights = w)
-  preds80 <- predict(mod, newdata = testing, interval="predict", level=0.8)
-  preds50 <- predict(mod, newdata = testing, interval="predict", level=0.5)
+  preds80 <- predict(mod, newdata = testing, interval="predict", level=0.8, weights = wT)
+  preds50 <- predict(mod, newdata = testing, interval="predict", level=0.5, weights = wT)
   plot_model(training, mod$fitted.values, testing, preds50[, 1])
   return(list(model = mod, preds50 = preds50, preds80 = preds80))
 }
 wlsMod <- wls(training, testing)
 ```
 
-Heteroscedasiticity removed
+
+```{r 4.3-model qrf, echo=FALSE, message=FALSE, warning=FALSE}
+qrf <- function(training, testing) {
+  Y <- training$price
+  X <- training %>% select(-price)
+  mod <- quantregForest(X, Y)
+  
+  # 50%, 80% prediction intervals
+  newX <- testing %>% select(-price)
+  preds <- predict(mod, what=c(.1, .25, .5, .75, .9), newdata=newX)
+  plot_model(training, mod$predicted, testing, preds[, 3])
+  preds50 <<- preds[c(3, 2, 4)]
+  return(list(model = mod, preds50 = preds[, c(3, 2, 4)], preds80 = preds[, c(3, 1, 5)]))
+}
+
+qrfMod <- qrf(training, testing)
+```
 
 
-
-
-
-```{r wls}
+```{r 4.4-model grb, echo=FALSE, message=FALSE, warning=FALSE}
 grb <- function(training, testing) {
-  mod     <- gbm(price ~ ., data = training, n.trees = 1000, shrinkage = 0.1, interaction.depth = 3)
+  mod     <- gbm(price ~ ., data = training, n.trees = 100, shrinkage = 0.1, 
+                 interaction.depth = 3, distribution = "gaussian",)
   preds80 <- predict(mod, newdata = testing, type = "response", se.fit = TRUE, interval="prediction", level=0.8)
   preds50 <- predict(mod, newdata = testing, type = "response", se.fit = TRUE, interval="prediction", level=0.5)
   plot_model(training, mod$fit, testing, preds50) 
@@ -175,7 +224,72 @@ grbMod <- grb(training, testing)
 ```
 
 
-```{r wls}
+
+
+
+
+```{r 5- prediction interval, echo=FALSE, message=FALSE, warning=FALSE}
+#' Interval score function for prediction intervals, smaller value is better
+#' @description
+#' Interval score for prediction intervals
+#'
+#' @param predobj has 3 (or more) columns: pointprediction, predLB, predUB
+#' @param actual corresponding vector of actual values
+# (in holdout set, for example)
+#' @param level level for prediction interval, e.g., 0.5 or 0.8
+#' @return list with
+#' summary consisting of level, average length, interval score, coverage rate
+#' and
+#' imiss with cases where prediction intervals don't contain actual values
+#'
+intervalScore <- function(predObj, actual, level) { 
+  n <- nrow(predObj)
+  alpha     <- 1- level
+  ilow      <- (actual<predObj[,2]) # overestimation
+  ihigh     <- (actual>predObj[,3]) # underestimation
+  sumlength <- sum(predObj[,3]-predObj[,2]) # sum of lengths of prediction intervals
+  sumlow    <- sum(predObj[ilow,2]-actual[ilow])*2/alpha
+  sumhigh   <- sum(actual[ihigh]-predObj[ihigh,3])*2/alpha
+  avglength <- sumlength/n
+  IS        <- (sumlength+sumlow+sumhigh)/n # average length + average under/over penalties
+  cover     <- mean(actual>= predObj[,2] & actual<=predObj[,3])
+  summ      <- c(level,avglength,IS,cover)
+  # summary with level, average length, interval score, coverage rate
+  imiss     <- which(ilow | ihigh)
+  list(summary=summ, imiss=imiss)
+}
+```
+
+
+```{r 5.2- prediction interval, echo=FALSE, message=FALSE, warning=FALSE}
+cat("----------OLS MODEL-------------------------------------\n")
+IS50ols <- intervalScore(olsMod$preds50, testing$price, 0.5)
+IS80ols <- intervalScore(olsMod$preds80, testing$price, 0.8)
+outols  <- rbind(IS50ols$summary, IS80ols$summary)
+colnames(outols) = c( "level", "avgleng", "IS", "cover")
+print(outols)
+
+cat("----------WLS MODEL-------------------------------------\n")
+IS50wls <- intervalScore(wlsMod$preds50, testing$price, 0.5)
+IS80wls <- intervalScore(wlsMod$preds80, testing$price, 0.8)
+outwls  <- rbind(IS50wls$summary, IS80wls$summary)
+colnames(outwls) = c( "level", "avgleng", "IS", "cover")
+print(outwls)
+
+cat("----------QRF MODEL-------------------------------------\n")
+IS50qrf <- intervalScore(qrfMod$preds50, testing$price, 0.5)
+IS80qrf <- intervalScore(qrfMod$preds80, testing$price, 0.8)
+outqrf  <- rbind(IS50qrf$summary, IS80qrf$summary)
+colnames(outqrf) = c( "level", "avgleng", "IS", "cover")
+print(outqrf)
+
+
+
+```
+
+
+
+```{r eln}
 eln <- function(training, testing) {
   mod <- gbm(price ~ ., data = training, n.trees = 1000, shrinkage = 0.5, interaction.depth = 4,  verbose = TRUE)
 
