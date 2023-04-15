@@ -1,0 +1,380 @@
+---
+title: "Project - Report"
+author: "Parham Pishrobat (71097927), Asen Lee (97629497), "
+output: pdf_document
+---
+
+```{r 0-setup, message=FALSE, warning=FALSE, include=FALSE}
+# load required libraries, and set up documents global option
+knitr::opts_chunk$set(echo = FALSE)
+options(knitr.table.format = "simple")
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(rpart)
+library(randomForest)
+library(glmnet)
+library(mgcv)
+library(e1071)
+library(quantregForest)
+```
+
+
+```{r 1-clean, message=FALSE, warning=FALSE, include=FALSE}
+# (after preliminary visualization), clean the data by filtering out meaningless 
+# predictors, removing missing values, factoring categorical predictors, 
+# filtering outliers, filtering or balancing unbalanced classes, and making
+# a proper transformations
+clean_data <- function(train, test) { 
+  trainC <- train %>%
+    drop_na() %>%
+    filter(price < 1e7) %>%
+    mutate(zip   = factor(zip_code),
+           lot   = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price = price/1000) %>%
+    filter( lot < 1e5) %>%
+    select(zip, beds, baths, size, lot, price)
+  testC <- test %>%
+    drop_na() %>%
+    filter(price < 1e7) %>%
+    mutate(zip   = factor(zip_code, levels = levels(trainC$zip)),
+           lot   = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price = price/1000) %>%
+    drop_na() %>%
+    filter( lot < 1e5) %>%
+    select(zip, beds, baths, size, lot, price)
+  return(list(train = trainC, test = testC))
+}
+```
+
+
+
+```{r 2-summarize, message=FALSE, warning=FALSE, include=FALSE}
+# produce many summary statistics and simple plots (some of the results such as correlations are saved in obj)
+summarize_data <- function(obj, output = T) { 
+  train <- obj$train
+  vars  <- colnames(train)
+  obj$vars <- vars
+  n     <- length(train)
+  corr  <- double(n-1)
+  print(cor(train[,-1]))
+  for (i in 2:(n-1)) {
+    corr[i] <- round(cor(train$price, train[, i]), 2)
+    if (output) {
+      plot(train[, i],  train$price, xlab=vars[i], ylab="price")
+      plot(train$zip,   train[, i],  xlab="zip", ylab=vars[i])
+    }
+  }
+  corr[c(1,6)] <- 1
+  obj$corr     <- corr
+  return(obj)
+}
+```
+
+
+
+```{r dev}
+dat   <- clean_data(read.csv('train.csv'), read.csv('test.csv'))
+train <- dat$train
+test  <- dat$test
+```
+
+```{r}
+summarize_data(dat)
+```
+
+
+
+
+```{r ols}
+ols <- function(train, test) {
+  mod   <- lm(price~., data = train)
+  preds <- predict(mod, newdata = test)
+  preds80 <- predict(mod, newdata = test, interval="predict", level=0.8)
+  preds50 <- predict(mod, newdata = test, interval="predict", level=0.5)
+  plot(mod$fitted.values, mod$residuals, ylim = c(-3000, 3000), pch = 16)
+  return(list(model = mod, preds=preds,preds80 = preds80, preds50=preds50))
+}
+olsMod <- ols(train, test)
+```
+Heteroscedasiticity apparent
+
+```{r}
+library(ggplot2)
+
+data <- test %>% select(-c(zip))
+all_data <- cbind(data, olsMod$preds50)
+
+#create plot
+ggplot(all_data, aes(x = data$price, y = fit)) + #define x and y axis variables
+    geom_point() + #add scatterplot points
+    stat_smooth(method = lm) + #confidence bands
+    geom_line(aes(y = lwr), col = "coral2", linetype = "dashed") + #lwr pred interval
+    geom_line(aes(y = upr), col = "coral2", linetype = "dashed") #upr pred interval
+```
+
+
+```{r wls}
+wls <- function(train, test) {
+  price <- sort(train$price)
+  pRange <- diff(range(price)) / 10
+  len    <- length(price)
+  w     <<- double(len)
+  r     <<- floor((train$price - min(price))/pRange) / 10
+  for (i in 1:len) {
+    w[i] <<- 1/sd(price[floor((r[i])*len)+1:floor((r[i]+1)*len)])
+  }
+  
+  mod   <- lm(price~., data = train, weights = w)
+  preds80 <- predict(mod, newdata = test, interval="predict", level=0.8)
+  preds50 <- predict(mod, newdata = test, interval="predict", level=0.5)
+  plot(mod$fitted.values, mod$residuals, ylim = c(-3000, 3000), pch = 16)
+  return(list(model = mod, preds50 = preds50, preds80=preds80))
+}
+
+wlsMod <- wls(train, test)
+```
+
+Heteroscedasiticity removed
+
+```{r}
+data <- test %>% select(-c(zip))
+all_data <- cbind(data, wlsMod$preds80)
+
+#create plot
+ggplot(all_data, aes(x = beds, y = price)) + #define x and y axis variables
+    geom_point() + #add scatterplot points
+    stat_smooth(method = lm) + #confidence bands
+    geom_line(aes(y = lwr), col = "coral2", linetype = "dashed") + #lwr pred interval
+    geom_line(aes(y = upr), col = "coral2", linetype = "dashed") #upr pred interval
+```
+
+
+
+```{r ridge}
+ridge <- function(train, test) {
+  Y <- train$price
+  X <- train %>% select(-price, -zip) %>% as.matrix()
+  cv_mod <- cv.glmnet(x=X, y=Y, alpha=0, standardize = TRUE)
+  best_lambda <- cv_mod$lambda.min
+  mod <- glmnet(X, Y, alpha=0, lambda=best_lambda)
+  
+  newX <- test %>% select(-price, -zip) %>% as.matrix()
+  preds <- predict(mod, s=best_lambda, newx=newX)
+  plot(cv_mod)
+  return(list(model = mod, preds = preds))
+}
+
+ridgeMod <- ridge(train, test)
+assess.glmnet(ridgeMod$preds, newy = test$price)
+```
+
+```{r}
+ridgeMod$preds
+```
+
+
+
+```{r}
+library(ciTools)
+library(trending)
+
+ridgePI50 <- add_pi(test, ridgeMod$model, names=c("lower", "upper"), alpha=0.25, nsims=20000)
+ridgePI80 <- add_pi(test, ridgeMod$model, names=c("lower", "upper"), alpha=0.1, nsims=20000)
+ridgePI80
+```
+
+
+
+
+```{r lasso}
+lasso <- function(train, test) {
+  Y <- train$price
+  X <- train %>% select(-price, -zip) %>% as.matrix()
+  cv_mod <- cv.glmnet(x=X, y=Y, alpha=1, standardize = TRUE)
+  mod <- glmnet(X, Y, alpha=1, lambda=cv_mod$lambda.min)
+  
+  newX <- test %>% select(-price, -zip) %>% as.matrix()
+  preds <- predict(mod, s='lambda.min', newx=newX)
+  plot(cv_mod)
+  return(list(model = mod, preds = preds))
+}
+
+lassoMod <- lasso(train, test)
+
+assess.glmnet(lassoMod$preds, newy = test$price)
+```
+
+
+```{r qRF}
+qRF <- function(train, test) {
+  set.seed(447)
+  Y <- train$price
+  X <- train %>% select(-price, -zip)
+  mod <- quantregForest(X, Y)
+  
+  # 50%, 80% prediction intervals
+  newX <- test %>% select(-price, -zip)
+  preds <- predict(mod, what=c(.1, .25, .5, .75, .9), newdata=newX)
+  return(list(model = mod, preds = preds))
+}
+
+qRFMod <- qRF(train, test)
+```
+
+```{r}
+#' Interval score function for prediction intervals, smaller value is better
+#' @description
+#' Interval score for prediction intervals
+#'
+#' @param predobj has 3 (or more) columns: pointprediction, predLB, predUB
+#' @param actual corresponding vector of actual values
+# (in holdout set, for example)
+#' @param level level for prediction interval, e.g., 0.5 or 0.8
+#' @return list with
+#' summary consisting of level, average length, interval score, coverage rate
+#' and
+#' imiss with cases where prediction intervals don't contain actual values
+#'
+intervalScore = function(predObj,actual,level)
+{ n = nrow(predObj)
+alpha = 1- level
+ilow = (actual<predObj[,2]) # overestimation
+ihigh = (actual>predObj[,3]) # underestimation
+sumlength = sum(predObj[,3]-predObj[,2]) # sum of lengths of prediction intervals
+sumlow = sum(predObj[ilow,2]-actual[ilow])*2/alpha
+sumhigh = sum(actual[ihigh]-predObj[ihigh,3])*2/alpha
+avglength = sumlength/n
+IS = (sumlength+sumlow+sumhigh)/n # average length + average under/over penalties
+cover = mean(actual>= predObj[,2] & actual<=predObj[,3])
+summ = c(level,avglength,IS,cover)
+# summary with level, average length, interval score, coverage rate
+imiss = which(ilow | ihigh)
+list(summary=summ, imiss=imiss)
+}
+
+IS50qRF <- intervalScore(qRFMod$preds[,c(3,2,4)], test$price, 0.5)
+IS80qRF <- intervalScore(qRFMod$preds[,c(3,1,5)], test$price, 0.8)
+outqRF <- rbind(IS50qRF$summary, IS80qRF$summary)
+colnames(outqRF) = c("level", "avgleng", "IS", "cover")
+print(outqRF)
+```
+
+```{r}
+# prediction intervals for ols
+IS50ols <- intervalScore(olsMod$preds50, test$price, 0.5)
+IS80ols <- intervalScore(olsMod$preds80, test$price, 0.8)
+outOls <- rbind(IS50ols$summary, IS80ols$summary)
+colnames(outOls) = c("level", "avgleng", "IS", "cover")
+print(outOls)
+```
+
+```{r}
+# prediction intervals for wls
+IS50wls <- intervalScore(wlsMod$preds50, test$price, 0.5)
+IS80wls <- intervalScore(wlsMod$preds80, test$price, 0.8)
+outWls <- rbind(IS50wls$summary, IS80wls$summary)
+colnames(outWls) = c("level", "avgleng", "IS", "cover")
+print(outWls)
+```
+
+
+
+
+
+```{r 4-predict, message=FALSE, warning=FALSE, include=FALSE}
+# given fitted models and test dataset, compute prediction
+predict_price <- function(obj) { 
+
+  return(obj)
+}
+
+```
+
+
+
+```{r 5-validate, message=FALSE, warning=FALSE, include=FALSE}
+# using all models and holdout predictions, compute diagnostic measures 
+#validate_model <- function(obj) { 
+
+# return(obj)
+#}
+```
+
+
+
+```{r 6-select, message=FALSE, warning=FALSE, include=FALSE}
+# based on the diagnostics computed in the validation stage, select the best performer
+#select_model <- function(obj) { 
+
+# return(obj)
+#}
+```
+
+
+
+```{r main, message=FALSE, warning=FALSE, include=FALSE}
+# main <- function(train, test) {
+#   
+#   analysis   <- train %>%
+#     clean_data() %>%                                          # 1. clean
+#     summarize_data(output = F) %>%                              # 2. summarize 
+#     fit_model() %>%                                             # 3. model
+#     predict_price(test) %>%                                     # 4. predict
+#     validate_model() %>%                                        # 5. validate
+#     select_model() %>%                                          # 6. select
+#   
+#   return(list(trainR    = analysis$train,
+#               trainT    = analysis$trainT,
+#               testR     = analysis$test,
+#               testT     = analysis$testT,
+#               models    = analysis$models,
+#               preds50   = analysis$preds50,
+#               preds80   = analysis$preds80,
+#               best      = analysis$best))
+# }
+```
+
+
+
+
+
+##### Data:
+
+
+##### Precleaning:
+
+
+ 
+
+##### Methods:
+
+
+
+
+##### Results:
+
+
+```{r run, echo=FALSE, message=FALSE, warning=FALSE}
+# test    <- read.csv('test.csv')   
+# train   <- read.csv('train.csv') 
+# output  <- main(train, test)
+```
+
+
+```{r results, echo=FALSE, message=FALSE, warning=FALSE}
+
+```
+
+
+##### Interpretation:
+
+
+
+```{r plots, echo=FALSE, message=FALSE, warning=FALSE}
+
+```
+
+
+
+ 
