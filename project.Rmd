@@ -212,15 +212,37 @@ qrfMod <- qrf(training, testing)
 
 
 ```{r 4.4-model grb, echo=FALSE, message=FALSE, warning=FALSE}
-grb <- function(training, testing) {
-  mod     <- gbm(price ~ ., data = training, n.trees = 100, shrinkage = 0.1, 
-                 interaction.depth = 3, distribution = "gaussian",)
-  preds80 <- predict(mod, newdata = testing, type = "response", se.fit = TRUE, interval="prediction", level=0.8)
-  preds50 <- predict(mod, newdata = testing, type = "response", se.fit = TRUE, interval="prediction", level=0.5)
-  plot_model(training, mod$fit, testing, preds50) 
+pred_gbm <- function(training, testing) {
+    mod   <- gbm(price ~ ., training)
+    preds <- predict(mod, newdata = testing, n.trees = 100, type = "response")
+    print("gggg")
+    return(preds)
+}
+
+gbm <- function(training, testing) {
+  nboot <- 100 # number of bootstrap samples
+  predsBoot <<- replicate(nboot, {
+    indices <<- sample(nrow(training), replace = TRUE)
+    trainingD  <- training[indices, ]
+    pred_gbm(trainingD, testing)}, simplify = TRUE)
+
+  # calculate prediction intervals from bootstrapped predictions
+  gbmPreds <- do.call(cbind, predsBoot)
+  lower80    <- apply(gbmPreds, 2, quantile, probs = 0.1)
+  upper80    <- apply(gbmPreds, 2, quantile, probs = 0.9)
+  est80      <- apply(gbmPreds, 2, mean)
+  preds80    <- data.frame(est80 = est80, lower80 = lower80, upper80 = upper80)
+  
+  lower50    <- apply(gbmPreds, 2, quantile, probs = 0.25)
+  upper50    <- apply(gbmPreds, 2, quantile, probs = 0.75)
+  est50      <- apply(gbmPreds, 2, mean)
+  preds50    <<- data.frame(est50 = est50, lower50 = lower50, upper50 = upper50)
+  
+  mod        <- gbm(price ~ ., data = training)
+  #plot_model(training, mod$fit, testing, preds50[, 1]) 
   return(list(model = mod, preds50 = preds50, preds80 = preds80))
 }
-grbMod <- grb(training, testing)
+gbmMod <- gbm(training, testing)
 ```
 
 
@@ -283,6 +305,13 @@ outqrf  <- rbind(IS50qrf$summary, IS80qrf$summary)
 colnames(outqrf) = c( "level", "avgleng", "IS", "cover")
 print(outqrf)
 
+cat("----------GBM MODEL-------------------------------------\n")
+IS50gbm <- intervalScore(gbmMod$preds50, testing$price, 0.5)
+IS80gbm <- intervalScore(gbmMod$preds80, testing$price, 0.8)
+outgbm  <- rbind(IS50gbm$summary, IS80gbm$summary)
+colnames(outgbm) = c( "level", "avgleng", "IS", "cover")
+print(outgbm)
+
 
 
 ```
@@ -290,13 +319,13 @@ print(outqrf)
 
 
 ```{r eln}
-eln <- function(training, testing) {
-  mod <- gbm(price ~ ., data = training, n.trees = 1000, shrinkage = 0.5, interaction.depth = 4,  verbose = TRUE)
-
-  preds <- predict(mod, newdata = testing)
-  return(list(model = mod))#, preds = preds))
-}
-grbMod <- grb(training, testing)
+# eln <- function(training, testing) {
+#   mod <- gbm(price ~ ., data = training, n.trees = 1000, shrinkage = 0.5, interaction.depth = 4,  verbose = TRUE)
+# 
+#   preds <- predict(mod, newdata = testing)
+#   return(list(model = mod))#, preds = preds))
+# }
+# grbMod <- grb(training, testing)
 ```
 
 
