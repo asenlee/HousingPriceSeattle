@@ -137,8 +137,8 @@ summarize_data <- function(training, output = T) {
   for (i in 2:(n-1)) {
     corr[i-1] <- round(cor(training$price, training[, i]), 2)
     if (output) {
-      plot(training[, i], training$price, ylab="price", xlab=vars[i])
-      plot(training$zip,   training[, i], xlab="zipcode", ylab=vars[i])
+      plot(training[, i], training$price, ylab="price", xlab=vars[i],   main = paste("price vs", vars[i]), cex = 0.5, pch = 16)
+      plot(training$zip,  training[, i],  ylab=vars[i], xlab="zipcode", main = paste("zipcode vs", vars[i]), cex = 0.5, pch = 16)
     }
   }
   print(summary(training))
@@ -284,6 +284,7 @@ qrf <- function(training, testing) {
   return(list(model = mod, preds50 = preds[, c(3, 2, 4)], preds80 = preds[, c(3, 1, 5)]))
 }
 qrfMod <- qrf(training, testing)
+importance()
 ```
 
 
