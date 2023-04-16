@@ -1,213 +1,445 @@
 ---
 title: "Project - Report"
-author: "Parham Pishrobat (71097927), Asen Lee (97629497), "
+author: "Parham Pishrobat (71097927), Asen Lee (97629497), Manya Chalisgaonkar"
 output: pdf_document
 ---
 
+
+## Load Required Librarties:
+
 ```{r 0-setup, message=FALSE, warning=FALSE, include=FALSE}
 # load required libraries, and set up documents global option
+
 knitr::opts_chunk$set(echo = FALSE)
 options(knitr.table.format = "simple")
 library(dplyr)
 library(tidyr)
 library(magrittr)
-library(rpart)
-library(randomForest)
-library(glmnet)
-library(mgcv)
-library(e1071)
+library(quantregForest)
+library(gbm)
+library(boot)
 ```
 
 
+## 0. Load Data
+
+```{r 0-load, message=FALSE, warning=FALSE, include=FALSE}
+#' load data
+#' 
+#' @return a list containing two dataframes: training and testing
+#' 
+load_data <- function() {
+  training   <- read.csv('train.csv')
+  testing    <- read.csv('test.csv')
+  return(list(training = training, testing = testing))
+}
+dat   <- load_data()
+```
+
+
+## 1. Process/Clean Data
 
 ```{r 1-clean, message=FALSE, warning=FALSE, include=FALSE}
-# (after preliminary visualization), clean the data by filtering out meaningless 
-# predictors, removing missing values, factoring categorical predictors, 
-# filtering outliers, filtering or balancing unbalanced classes, and making
-# a proper transformations
-clean_data <- function(train, test) { 
-  
-  trainPr <- train %>%
+#' Clean Data
+#' 
+#' @description clean the data by filtering out meaningless predictors, removing 
+#'             missing values, factoring categorical predictors, filtering 
+#'             outliers, filtering or balancing unbalanced classes, and making
+#'             adequate transformations. 
+#'             
+#' @details the following transformations are chosen after many trials and errors:
+#'          - rows with missing values are dropped
+#'          - only `price` values of 10,000,000 was kept
+#'          - drop observations that have "acre" for `lot_size_units` as they already fall more than 10,000 sqft
+#'          - `zip_code` is converted to factor and renamed to `zip`
+#'          - `lot_size` is renamed to `lot`
+#'          - `price` is transformed by taking square root
+#'          - only `lot` values smaller than 10,000 sqft was kept
+#'          - `size_unit` is removed as it has only one character value "sqft"
+#'          - `size_lot_units` is removed as it has only one character values "sqft" ("acre is already dropped)
+#'          - all above processing steps are applied to test set
+#'
+#' @param dat a list containing two dataframes (raw data) : training, testing
+#'
+#' @return a list containing two dataframes (processed data) : training, testing and have following columns:
+#'          - zip
+#'          - beds
+#'          - baths
+#'          - size
+#'          - lot
+#'          - price
+#'          
+clean_data <- function(dat) { 
+  trainingC <- dat$training %>%
     drop_na() %>%
-    filter(price < 1e7) %>%
+    filter(price < 1e7 & lot_size_units != "acre") %>%
     mutate(zip   = factor(zip_code),
-           lot = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
-           price  = price/1000) %>%
-    filter( lot < 1e5) %>%
+           lot   = lot_size,
+           price = sqrt(price)) %>%
+    filter(lot < 1e4) %>%
     select(zip, beds, baths, size, lot, price)
-  
-  
-  testPr <- test %>%
+  testingC <- dat$testing %>%
     drop_na() %>%
-    filter(price < 1e7) %>%
-    mutate(zip   = factor(zip_code),
-           lot = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
-           price  = price/1000) %>%
-    filter( lot < 1e5) %>%
+    filter(price < 1e7 & lot_size_units != "acre") %>%
+    mutate(zip   = factor(zip_code, levels = levels(trainingC$zip)),
+           lot   = lot_size,
+           price = sqrt(price)) %>%
+    filter(lot < 1e4) %>%
     select(zip, beds, baths, size, lot, price)
-  return(list(train = trainPr, test = testPr))
+  return(list(training = trainingC, testing = testingC))
 }
+# another version of processing (results are based on above)
+clean_data2 <- function(dat) { 
+  trainingC <- dat$training %>%
+    drop_na() %>%
+    filter(price < 1e7) %>%
+    mutate(zip   = factor(zip_code),
+           lot   = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price = price/1000) %>%
+    filter( lot < 1e5) %>%
+    select(zip, beds, baths, size, lot, price)
+  testingC <- dat$testing %>%
+    drop_na() %>%
+    filter(price < 1e7) %>%
+    mutate(zip   = factor(zip_code, levels = levels(trainingC$zip)),
+           lot   = if_else(lot_size_units == "acre", lot_size*43560, lot_size),
+           price = price/1000) %>%
+    drop_na() %>%
+    filter( lot < 1e5) %>%
+    select(zip, beds, baths, size, lot, price)
+  return(list(training = trainingC, testing = testingC))
+}
+dat   <- clean_data(dat)
+training <- dat$training
+testing  <- dat$testing
 ```
 
 
+## 2. Summarize Data
 
-```{r 2-summarize, message=FALSE, warning=FALSE, include=FALSE}
-# produce many summary statistics and simple plots (some of the results such as correlations are saved in obj)
-summarize_data <- function(obj, output = T) { 
-  train <- obj$train
-  vars  <- colnames(train)
-  obj$vars <- vars
-  n     <- length(train)
-  corr  <- double(n-1)
-  print(cor(train[,-1]))
+```{r 2-summarize, echo=FALSE, message=FALSE, warning=FALSE}
+#' Summarize Data
+#'
+#' @description produce many summary statistics and simple plots 
+#' 
+#' @param training a dataframe containing the processed training dataset
+#' @param output a logical indicating whether results are displayed (default is true)
+#'
+#' @return a list containing two vectors: 
+#'        - corr: a double vector of correlation of response (price) with other numerical variables (beds, baths, size, lot) 
+#'        - vars: a string vector of variable names
+#'        
+summarize_data <- function(training, output = T) {
+  vars  <- colnames(training)
+  n     <- ncol(training)
+  corr  <- double(n-2)
+  print(round(cor(training[,-1]), 2))
   for (i in 2:(n-1)) {
-    corr[i] <- round(cor(train$price, train[, i]), 2)
+    corr[i-1] <- round(cor(training$price, training[, i]), 2)
     if (output) {
-      plot(train$price, train[, i], xlab="price", ylab=vars[i])
-      plot(train$zip,   train[, i], xlab="price", ylab=vars[i])
+      plot(training[, i], training$price, ylab="price", xlab=vars[i],   main = paste("price vs", vars[i]), cex = 0.5, pch = 16)
+      plot(training$zip,  training[, i],  ylab=vars[i], xlab="zipcode", main = paste("zipcode vs", vars[i]), cex = 0.5, pch = 16)
     }
   }
-  corr[c(1,6)] <- 1
-  obj$corr     <- corr
-  return(obj)
+  print(summary(training))
+  return(list(corr = corr, vars = vars))
+}
+res <- summarize_data(training, output = T)
+```
+
+
+## Plot Models
+
+```{r 3-plot model, message=FALSE, warning=FALSE, include=FALSE}
+#' Plot Models
+#'
+#' @param training a dataframe containing the processed training dataset
+#' @param fitted   a double vector containing fitted values (training) of the model
+#' @param testing  a dataframe containing the processed testing dataset
+#' @param preds    a double vector containing predicted values (testing) of the model
+#'
+plot_model <- function(training, fitted, testing, preds) {
+  varNames <- colnames(training)
+  for (i in 4:5) {
+    plot(training[, i],  fitted - training$price,     # residuals vs predictors plots
+         xlab = varNames[i], ylab = "Residuals",
+         main = paste("Residual vs", varNames[i]),
+         ylim = c(-1000, 1000), pch = 16, cex = 0.5)
+  }
+  plot(fitted, training$price,                       # observation(in-sample) vs fitted values plot  
+       xlab = "Fitted Values", ylab = "Observed",
+       main = "Observed vs Fitted Values",
+       xlim = c(0, 2000),  ylim = c(0, 2000), pch = 16, cex = 0.5)
+  lines(seq(1,2000), seq(1,2000), type = "l", col = "red")  # identity line indicating perfect fit
+  plot(preds, testing$price,                         # actual(out-of-sample) vs predictions plots
+       xlab = "Predicted", ylab = "Actual",
+       main = "Predictions vs Actual Values",              
+       xlim = c(0, 2000),  ylim = c(0, 2000), pch = 16, cex = 0.5)
+  lines(seq(1,2000), seq(1,2000), type = "l", col = "red") # identity line indicating perfect prediction
+  plot(testing$price, testing$price - preds,               # residuals(out-of-sample) vs actual((out-of-sample)) plots
+       xlab = "Price", ylab = "Residual",
+       main = "Residuals vs Price",
+       ylim = c(-1000, 1000), pch = 16, cex = 0.5)
+  x <- rnorm(100)
+  qqnorm(x, main = "QQ Plot of Random Normal Data", col = "blue") # qqplots
+  qqline(x, col = "red")
+  par(mfrow = c(1, 2))
+  hist(training$price, xlab = "Price", main = "training Data Distribution")
+  hist(testing$price, xlab = "Price", main = "testing Data Distribution")
 }
 ```
 
 
+## 4.1 Ordinary Least Square (OLS) Model:
 
-```{r dev}
-test    <- read.csv('test.csv')   
-housing   <- read.csv('train.csv') %>%
-  clean_data(test) %>%
-  summarize_data()
+```{r 4.1-model ols, echo=FALSE, message=FALSE, warning=FALSE}
+#' Ordinary Least Square (OLS) model
+#'
+#' @param training a dataframe containing the processed training dataset
+#' @param testing  a dataframe containing the processed testing dataset
+#'
+#' @return a list containing:
+#'         - model: lm model(ols) object
+#'         - preds50: 0.5 level (n * 3) prediction matrix (estimates, lower, upper)
+#'         - preds80: 0.8 level (n * 3) prediction matrix (estimates, lower, upper)
+#'         
+ols <- function(training, testing) {
+  mod     <- lm(price~., data = training)
+  preds80 <- predict(mod, newdata = testing, interval="predict", level=0.8)
+  preds50 <- predict(mod, newdata = testing, interval="predict", level=0.5)
+  plot_model(training, mod$fitted.values, testing, preds50[, 1])
+  return(list(model = mod, preds50 = preds50, preds80 = preds80))
+}
+olsMod <- ols(training, testing)
+```
+
+
+## 4.2 Weighted Least Square (WLS) Model:
+
+```{r 4.2-model wls, echo=FALSE, message=FALSE, warning=FALSE}
+#' Weighted Least Square (OLS) model
+#'
+#' @param training a dataframe containing the processed training dataset
+#' @param testing  a dataframe containing the processed testing dataset
+#'
+#' @return a list containing:
+#'         - model: lm model(wls) object
+#'         - preds50: 0.5 level (n * 3) prediction matrix (estimates, lower, upper)
+#'         - preds80: 0.8 level (n * 3) prediction matrix (estimates, lower, upper)
+#'         
+wls <- function(training, testing) {
+  # compute weights for training set
+  priceW <- sort(training$price)
+  pRange <- diff(range(priceW)) 
+  len    <- length(priceW)
+  w      <- double(len)
+  r      <- (training$price - min(priceW))/pRange
+  for (i in 1:len) {
+    w[i] <- 1/sd(priceW[max((floor((r[i]-0.05)*len)), 1):min(floor((r[i]+0.05)*len), len)])
+  }
+  
+  # compute weights for testing set
+  priceWT <- sort(testing$price)
+  pRangeT <- diff(range(priceWT)) 
+  lenT    <- length(priceWT)
+  wT      <- double(lenT)
+  rT      <- (testing$price - min(priceWT))/pRangeT
+  for (i in 1:lenT) {
+    wT[i] <- 1/sd(priceWT[max((floor((rT[i]-0.05)*lenT)), 1):min(floor((rT[i]+0.05)*lenT), lenT)])
+  }
+
+  mod     <- lm(price~., data = training, weights = w)
+  preds80 <- predict(mod, newdata = testing, interval="predict", level=0.8, weights = wT)
+  preds50 <- predict(mod, newdata = testing, interval="predict", level=0.5, weights = wT)
+  plot_model(training, mod$fitted.values, testing, preds50[, 1])
+  return(list(model = mod, preds50 = preds50, preds80 = preds80))
+}
+wlsMod <- wls(training, testing)
+```
+
+
+## 4.3 Quantile Random Forest (QRF) Model
+
+```{r 4.3-model qrf, echo=FALSE, message=FALSE, warning=FALSE}
+#' Quantile Random Forest (QRF) model
+#'
+#' @param training a dataframe containing the processed training dataset
+#' @param testing  a dataframe containing the processed testing dataset
+#'
+#' @return a list containing:
+#'         - model: quantregForest model(qrf) object
+#'         - preds50: 0.5 level (n * 3) prediction matrix (estimates, lower, upper)
+#'         - preds80: 0.8 level (n * 3) prediction matrix (estimates, lower, upper)
+#'         
+qrf <- function(training, testing) {
+  Y <- training$price
+  X <- training %>% select(-price)
+  mod <- quantregForest(X, Y)
+  
+  # 50%, 80% prediction intervals
+  newX <- testing %>% select(-price)
+  preds <- predict(mod, what=c(.1, .25, .5, .75, .9), newdata=newX)
+  plot_model(training, mod$predicted, testing, preds[, 3])
+  preds50 <<- preds[c(3, 2, 4)]
+  return(list(model = mod, preds50 = preds[, c(3, 2, 4)], preds80 = preds[, c(3, 1, 5)]))
+}
+qrfMod <- qrf(training, testing)
+importance()
+```
+
+
+## 4.4 Gradient Boosting Method (GBM) Model:
+
+```{r 4.4-model grb, echo=FALSE, message=FALSE, warning=FALSE}
+#' Gradient Boosting Method (GBM) Model
+#'
+#' @param training a dataframe containing the processed training dataset
+#' @param testing  a dataframe containing the processed testing dataset
+#'
+#' @return a list containing:
+#'         - model: gbm model(gbm) object
+#'         - preds50: 0.5 level (n * 3) prediction matrix (estimates, lower, upper)
+#'         - preds80: 0.8 level (n * 3) prediction matrix (estimates, lower, upper)
+#'         
+gbb <- function(training, testing) { # named gbb to avoid conflict with `gbm()` function
+  mod <- gbm(price ~ . , data = training, distribution = "gaussian", interaction.depth = 2, 
+             shrinkage = 1.05, n.trees = 1000)
+  bootPreds <<- boot(testing, 
+                    function(data, index, ipred) {
+                      modBoot <- gbm(price ~ . , data = training[index, ], distribution = "gaussian", 
+                                     interaction.depth = 2, shrinkage = 1.05)
+                      predict(modBoot, newdata = testing, n.trees = 1000, 
+                              distribution = "gaussian", type = "response")
+                      }, R = 1000)
+  
+  preds80    <- t(apply(bootPreds$t, 2, quantile, probs = c(0.5, 0.1, 0.9)))
+  preds50    <- t(apply(bootPreds$t, 2, quantile, probs = c(0.5, 0.25, 0.75)))
+  
+  plot_model(training, mod$fit, testing, preds50[, 1]) 
+  return(list(model = mod, preds50 = preds50, preds80 = preds80))
+}
+gbmMod <- gbb(training, testing)
 ```
 
 
 
-```{r summary}
-names(housing$train)
-dim(housing$train)
-kableExtra::kable(summary(housing$train))
-unique(housing$train$size)
-unique(housing$train$lot)
-table(housing$train$zip)
-```
+## 5. Compute Prediction Interval
 
 
-
-```{r 3-model, message=FALSE, warning=FALSE, include=FALSE}
-# fit models (models are selected based on the results of exploratory analysis on train set)
-fit_model <- function(obj) {
-  obj$ols   <- lm(price~., data = obj$train)
-  #obj$wls  <- lm(price~., data = obj$train, weights = abs(obj$corr))
-  obj$rf    <- randomForest(price~., data = obj$train)
-  obj$gam   <- gam(price~s(size), family = "gaussian", data = obj$train)
-  obj$svm   <- svm(price~., data = obj$train, kernel = "radial", scale = FALSE)
-  #obj$ridge <- glmnet()
-  #obj$lasso <- glmnet()
-  return(obj)
+```{r 5- prediction interval, echo=FALSE, message=FALSE, warning=FALSE}
+#' Interval Score 
+#' 
+#' @description computes interval scores for prediction interval given a level
+#'
+#' @param predobj a numerical (m * 3) matrix (pointprediction, predLB, predUB)
+#' @param actual  a numerical vector of length m, corresponding vector of actual values
+#' @param level   a scaler in (0, 1) as level for prediction interval, e.g., 0.5 or 0.8
+#' 
+#' @return a list containing two vectors:
+#'         - summ: a summary vector containing level, average length, interval score, coverage rate
+#'         - imiss: a logical vector with cases where prediction intervals don't contain actual values
+#'         
+intervalScore <- function(predObj, actual, level) { 
+  n <- nrow(predObj)
+  alpha     <- 1- level
+  ilow      <- (actual<predObj[,2]) # overestimation
+  ihigh     <- (actual>predObj[,3]) # underestimation
+  sumlength <- sum(predObj[,3]-predObj[,2]) # sum of lengths of prediction intervals
+  sumlow    <- sum(predObj[ilow,2]-actual[ilow])*2/alpha
+  sumhigh   <- sum(actual[ihigh]-predObj[ihigh,3])*2/alpha
+  avglength <- sumlength/n
+  IS        <- (sumlength+sumlow+sumhigh)/n # average length + average under/over penalties
+  cover     <- mean(actual>= predObj[,2] & actual<=predObj[,3])
+  summ      <- c(level,avglength,IS,cover)
+  imiss     <-  which(ilow | ihigh)
+  list(summary=summ, imiss=imiss)
 }
 ```
 
-```{r}
-mod <- fit_model(housing)
+
+## 6. Compare Models: 
+
+```{r 6- comparison, echo=FALSE, message=FALSE, warning=FALSE}
+#' Compare Models
+#'
+#' @param testing a dataframe containing the processed testing dataset
+#' @param olsMod  a lm object containing the fitted ols model 
+#' @param wlsMod  a lm object containing the fitted wls model 
+#' @param qrfMod  a quantregForest object containing the fitted qrf model 
+#' @param gbmMod  a gbm object containing the fitted gbm model 
+#'
+#' @return a list containing the table of model performance for each model:
+#'         - ols: a (2 * 4) matrix containing the performance metrics of ols model
+#'         - wls: a (2 * 4) matrix containing the performance metrics of wls model
+#'         - qrf: a (2 * 4) matrix containing the performance metrics of qrf model
+#'         - gbm: a (2 * 4) matrix containing the performance metrics of gbm model
+#' 
+compare_models <- function(testing, olsMod, wlsMod, qrfMod, gbmMod) {
+  cat("----------OLS MODEL-------------------------------------\n")
+  IS50ols <- intervalScore(olsMod$preds50, testing$price, 0.5)
+  IS80ols <- intervalScore(olsMod$preds80, testing$price, 0.8)
+  outols  <- rbind(IS50ols$summary, IS80ols$summary)
+  colnames(outols) = c( "level", "avgleng", "IS", "cover")
+  print(outols)
+  
+  cat("----------WLS MODEL-------------------------------------\n")
+  IS50wls <- intervalScore(wlsMod$preds50, testing$price, 0.5)
+  IS80wls <- intervalScore(wlsMod$preds80, testing$price, 0.8)
+  outwls  <- rbind(IS50wls$summary, IS80wls$summary)
+  colnames(outwls) = c( "level", "avgleng", "IS", "cover")
+  print(outwls)
+  
+  cat("----------QRF MODEL-------------------------------------\n")
+  IS50qrf <- intervalScore(qrfMod$preds50, testing$price, 0.5)
+  IS80qrf <- intervalScore(qrfMod$preds80, testing$price, 0.8)
+  outqrf  <- rbind(IS50qrf$summary, IS80qrf$summary)
+  colnames(outqrf) = c( "level", "avgleng", "IS", "cover")
+  print(outqrf)
+  
+  cat("----------GBM MODEL-------------------------------------\n")
+  IS50gbm <- intervalScore(gbmMod$preds50, testing$price, 0.5)
+  IS80gbm <- intervalScore(gbmMod$preds80, testing$price, 0.8)
+  outgbm  <- rbind(IS50gbm$summary, IS80gbm$summary)
+  colnames(outgbm) = c( "level", "avgleng", "IS", "cover")
+  print(outgbm)
+  return(list(ols = outols, wls = outwls, qrf = outqrf, gbm = outgbm))
+}
+output <- compare_models(testing, olsMod, wlsMod, qrfMod, gbmMod)
 ```
 
-
-
-```{r 4-predict, message=FALSE, warning=FALSE, include=FALSE}
-# given fitted models and test dataset, compute prediction
-#predict_price <- function(obj) { 
-#
-# return(obj)
-#}
-```
-
-
-
-```{r 5-validate, message=FALSE, warning=FALSE, include=FALSE}
-# using all models and holdout predictions, compute diagnostic measures 
-#validate_model <- function(obj) { 
-
-# return(obj)
-#}
-```
-
-
-
-```{r 6-select, message=FALSE, warning=FALSE, include=FALSE}
-# based on the diagnostics computed in the validation stage, select the best performer
-#select_model <- function(obj) { 
-
-# return(obj)
-#}
-```
 
 
 
 ```{r main, message=FALSE, warning=FALSE, include=FALSE}
-# main <- function(train, test) {
-#   
-#   analysis   <- train %>%
-#     clean_data() %>%                                          # 1. clean
-#     summarize_data(output = F) %>%                              # 2. summarize 
-#     fit_model() %>%                                             # 3. model
-#     predict_price(test) %>%                                     # 4. predict
-#     validate_model() %>%                                        # 5. validate
-#     select_model() %>%                                          # 6. select
-#   
-#   return(list(trainR    = analysis$train,
-#               trainT    = analysis$trainT,
-#               testR     = analysis$test,
-#               testT     = analysis$testT,
-#               models    = analysis$models,
-#               preds50   = analysis$preds50,
-#               preds80   = analysis$preds80,
-#               best      = analysis$best))
-# }
+main <- function() {
+
+  dat <- load_data() %>%                     # 0. Load Data
+    clean_data()                             # 1. Process Data
+  training <- dat$training      
+  testing  <- dat$testing 
+  summarize_data(training, output = F)       # 2. Summarize Data
+                                             # (3. Plot Model is performed inside model function in 4)
+  olsMod <- ols(training, testing)           # 4.1 Fit OLS Model
+  wlsMod <- wls(training, testing)           # 4.2 Fit WLS Model
+  qrfMod <- qrf(training, testing)           # 4.3 Fit QRF Model
+  gbmMod <- gbb(training, testing)           # 4.4 Fit GBM Model
+                                             
+  performance <- compare_models(testing,     # 6. Compare Models (5. Prediction Interval step performed inside 6)
+                                olsMod, wlsMod, 
+                                qrfMod, gbmMod)
+  
+  return(list(data        = dat,
+              training    = training,
+              testing     = testing,
+              ols         = olsMod,
+              wls         = wlsMod,
+              qrf         = qrfMod,
+              gbm         = gbmMod,
+              performance = performance))
+}
 ```
 
 
 
 
 
-##### Data:
-
-
-##### Precleaning:
-
-
- 
-
-##### Methods:
-
-
-
-
-##### Results:
-
-
-```{r run, echo=FALSE, message=FALSE, warning=FALSE}
-# test    <- read.csv('test.csv')   
-# train   <- read.csv('train.csv') 
-# output  <- main(train, test)
-```
-
-
-```{r results, echo=FALSE, message=FALSE, warning=FALSE}
-
-```
-
-
-##### Interpretation:
-
-
-
-```{r plots, echo=FALSE, message=FALSE, warning=FALSE}
-
-```
-
-
-
-
- 
